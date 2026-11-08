@@ -38,7 +38,8 @@ export const useAppStore = create<AppState>()((set) => ({
 
   setOutfitItem: (slot, item) =>
     set((s) => {
-      const outfit = withOutfitRules(s.params.outfit, slot);
+      // Exclusivity applies when *setting* a slot (spec §5); clearing one never evicts another.
+      const outfit = item ? withOutfitRules(s.params.outfit, slot) : { ...s.params.outfit };
       if (item) outfit[slot] = item;
       else delete outfit[slot];
       return { params: { ...s.params, outfit } };

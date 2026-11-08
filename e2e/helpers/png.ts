@@ -17,3 +17,12 @@ export function countDistinctColors(buf: Buffer, sampleEvery = 4): number {
   }
   return seen.size;
 }
+
+/** Fraction of pixels that are fully transparent (alpha 0). */
+export function transparentFraction(buf: Buffer): number {
+  const png = PNG.sync.read(buf);
+  let transparent = 0;
+  const total = png.width * png.height;
+  for (let i = 3; i < png.data.length; i += 4) if (png.data[i] === 0) transparent++;
+  return transparent / total;
+}

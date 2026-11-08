@@ -47,3 +47,10 @@ test('setAvatarStatus error stores the message; ready clears it', () => {
   s.setAvatarStatus('ready');
   expect(useAppStore.getState().avatarError).toBeNull();
 });
+
+test('clearing an empty exclusive slot leaves the worn counterpart alone', () => {
+  const s = useAppStore.getState();
+  s.setOutfitItem('full', { id: 'dress_01' });
+  s.setOutfitItem('top', null);
+  expect(useAppStore.getState().params.outfit).toEqual({ full: { id: 'dress_01' } });
+});

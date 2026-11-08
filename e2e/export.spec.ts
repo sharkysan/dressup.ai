@@ -1,14 +1,16 @@
 import { expect, test } from '@playwright/test';
 import fs from 'node:fs';
 import { computeExportSize } from '../src/export/exportSize';
-import { countDistinctColors, readPngSize } from './helpers/png';
+import { countDistinctColors, readPngSize, transparentFraction } from './helpers/png';
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-test('downloads a PNG at 2x CSS size, independent of device pixel ratio', async ({ browser }) => {
+test('downloads an opaque PNG at 2x CSS size, independent of device pixel ratio', async ({
+  browser,
+}) => {
   const context = await browser.newContext({
     viewport: { width: 800, height: 600 },
-    deviceScaleFactor: 2,
+    deviceScaleFactor: 1.5,
     acceptDownloads: true,
   });
   const page = await context.newPage();
@@ -31,6 +33,8 @@ test('downloads a PNG at 2x CSS size, independent of device pixel ratio', async 
   expect(buf.subarray(0, 8)).toEqual(PNG_SIGNATURE);
   expect(readPngSize(buf)).toEqual(computeExportSize(css!.width, css!.height));
   expect(countDistinctColors(buf)).toBeGreaterThan(50);
+  // What the user saves must be what they see: the backdrop is part of the GL scene, so no transparency.
+  expect(transparentFraction(buf)).toBe(0);
 
   await context.close();
 });
