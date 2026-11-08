@@ -44,8 +44,8 @@ Single-page app, no backend. Static hosting (Cloudflare Pages or Vercel). Everyt
 
 Stack:
 
-- Vite, React 18, TypeScript (strict).
-- `three`, `@react-three/fiber`, `@react-three/drei`.
+- Vite, React 18+ (19 for a fresh start), TypeScript (strict).
+- `three` (r167+), `@react-three/fiber` matching the React major, `@react-three/drei`.
 - `@pixiv/three-vrm` (VRM 1.0 loading, humanoid normalised bones, expressions, MToon material).
 - `@mediapipe/tasks-vision`: `FaceLandmarker` (478 landmarks, 52 blendshapes, facial transformation matrix) and `ImageSegmenter` with the multiclass selfie model (background, hair, body-skin, face-skin, clothes, others). Model files are self-hosted under `/models/` and lazy-loaded.
 - `zustand` for app state. `fflate` as a fallback for deflate where `CompressionStream` is unavailable.
