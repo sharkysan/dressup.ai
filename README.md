@@ -1,5 +1,7 @@
 # Kiss
 
+![CI](https://github.com/sharkysan/dressup.ai/actions/workflows/ci.yml/badge.svg)
+
 A web dress-up game for adults: upload a photo, get a stylized 3D avatar that resembles you, dress it from a wardrobe, pose it, and export an image. Everything runs in the browser — the photo never leaves the device.
 
 Design spec: [`docs/superpowers/specs/2026-11-08-dressup-game-design.md`](docs/superpowers/specs/2026-11-08-dressup-game-design.md).
@@ -32,3 +34,13 @@ Large binary assets are not committed. After cloning, fetch the development plac
 ```
 
 Licences for every third-party asset are listed in [`assets/LICENSES.md`](assets/LICENSES.md).
+
+## Running the checks
+
+CI runs `npm run ci` on every push and pull request (`.github/workflows/ci.yml`). To run the same chain locally:
+
+```bash
+npx playwright install --with-deps chromium   # once
+./tools/fetch-placeholder-vrm.sh              # once
+npm run ci
+```
