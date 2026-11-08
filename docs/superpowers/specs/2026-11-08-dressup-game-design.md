@@ -55,38 +55,47 @@ Data flow: photo → `analysis` → `AvatarParams` → `avatar` (applies params 
 
 Modules (folders under `src/`, each with its own tests):
 
-| Module | Responsibility | Depends on |
-|---|---|---|
-| `analysis/` | photo → `AvatarParams`. Pure mapping functions over landmark and mask data; MediaPipe behind one adapter. | MediaPipe adapter, calibration stats |
-| `avatar/` | load VRM base, apply colours, morphs, hair, extras; own the skeleton and raw-bone lookup. | three-vrm, catalogue |
-| `wardrobe/` | garment catalogue, load/attach/detach to the skeleton, region masks. | avatar |
-| `posing/` | pose catalogue, apply pose to normalised bones, fine-tune sliders, expressions, heel handling. | avatar, catalogue |
-| `export/` | PNG render, params ↔ URL, localStorage. | params schema |
-| `ui/` | screens and panels. | zustand store |
-| `catalog/` | types and loader for `catalog.json`. | — |
-| `assets/` (public) | VRM bases, hair and garment GLBs, pose JSON, thumbnails, models, `catalog.json`. | built by `tools/` |
-| `tools/` | asset pipeline scripts, catalogue builder and linter, thumbnail renderer, Mixamo pose extractor. | Blender, gltf-transform |
+| Module             | Responsibility                                                                                            | Depends on                           |
+| ------------------ | --------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| `analysis/`        | photo → `AvatarParams`. Pure mapping functions over landmark and mask data; MediaPipe behind one adapter. | MediaPipe adapter, calibration stats |
+| `avatar/`          | load VRM base, apply colours, morphs, hair, extras; own the skeleton and raw-bone lookup.                 | three-vrm, catalogue                 |
+| `wardrobe/`        | garment catalogue, load/attach/detach to the skeleton, region masks.                                      | avatar                               |
+| `posing/`          | pose catalogue, apply pose to normalised bones, fine-tune sliders, expressions, heel handling.            | avatar, catalogue                    |
+| `export/`          | PNG render, params ↔ URL, localStorage.                                                                   | params schema                        |
+| `ui/`              | screens and panels.                                                                                       | zustand store                        |
+| `catalog/`         | types and loader for `catalog.json`.                                                                      | —                                    |
+| `assets/` (public) | VRM bases, hair and garment GLBs, pose JSON, thumbnails, models, `catalog.json`.                          | built by `tools/`                    |
+| `tools/`           | asset pipeline scripts, catalogue builder and linter, thumbnail renderer, Mixamo pose extractor.          | Blender, gltf-transform              |
 
 ## 5. Core data model: `AvatarParams`
 
 ```ts
 type AvatarParams = {
   version: 1;
-  base: 'a' | 'b';                       // body base (a: feminine, b: masculine proportions)
-  skin: string;                          // hex, continuous
-  hairColor: string;                     // hex, continuous
+  base: 'a' | 'b'; // body base (a: feminine, b: masculine proportions)
+  skin: string; // hex, continuous
+  hairColor: string; // hex, continuous
   eyeColor: 'brown' | 'darkBrown' | 'hazel' | 'green' | 'blue' | 'grey';
-  lipTint: string;                       // hex, applied at low strength
-  hair: string;                          // hairstyle id, or 'none'
+  lipTint: string; // hex, applied at low strength
+  hair: string; // hairstyle id, or 'none'
   brows: { shape: 'straight' | 'arched' | 'soft' | 'angled'; thickness: number }; // 0..1
-  faceShape: {                           // morph weights, each -1..1
-    faceWidth: number; jawWidth: number; chinLength: number; noseWidth: number;
-    noseLength: number; eyeSpacing: number; eyeSize: number; lipFullness: number;
+  faceShape: {
+    // morph weights, each -1..1
+    faceWidth: number;
+    jawWidth: number;
+    chinLength: number;
+    noseWidth: number;
+    noseLength: number;
+    eyeSpacing: number;
+    eyeSize: number;
+    lipFullness: number;
   };
   extras: { glasses?: string; facialHair?: string };
-  outfit: Partial<Record<'top' | 'bottom' | 'full' | 'shoes' | 'outer' | 'head', { id: string; color?: string }>>;
-  pose: string;                          // pose id
-  poseTweak: { headTurn: number; headTilt: number; torsoLean: number };  // -1..1
+  outfit: Partial<
+    Record<'top' | 'bottom' | 'full' | 'shoes' | 'outer' | 'head', { id: string; color?: string }>
+  >;
+  pose: string; // pose id
+  poseTweak: { headTurn: number; headTilt: number; torsoLean: number }; // -1..1
   expression: 'neutral' | 'happy' | 'relaxed' | 'surprised' | 'wink';
   scene: { backdrop: string; framing: 'full' | 'portrait' };
 };
@@ -114,17 +123,17 @@ Detection and gates:
 
 Extraction (all pure functions in `analysis/mapping/`, unit-tested on fixtures):
 
-| Attribute | Source | Mapping |
-|---|---|---|
-| `skin` | face-skin mask pixels converted to OKLab; drop the darkest and brightest 20% by L; median | hex. Shade colour for MToon is derived (L −0.18, chroma +10%). |
-| `hairColor` | hair mask pixels, brighter half by L; median in OKLab | hex. If hair mask area < 2% of face box area → `hair: 'none'` suggested and colour defaults to a neutral derived from brows. |
-| `eyeColor` | iris landmarks (468–477), disc of radius 0.6 × iris radius, median in OKLab | snapped to the nearest of 6 presets |
-| `lipTint` | lip-region landmarks polygon; median | hex, applied at 35% strength |
-| `faceShape.*` | landmarks transformed by the inverse facial transformation matrix (pose-normalised), ratios: face width ÷ face height, jaw width ÷ cheekbone width, chin length ÷ face height, nose width ÷ face width, nose length ÷ face height, inter-pupil distance ÷ face width, eye height ÷ eye width, (upper + lower lip height) ÷ face height | z-score against calibration mean/std → clamp −1..1 → ×0.8 so extremes stay stylised |
-| `hair` | hair mask geometry relative to the face box: length class (lowest hair pixel above chin / between chin and shoulder line / below), volume (hair area ÷ face area, 3 bins), bangs (coverage of the forehead band between brow line and face-box top > 40%), parting side (left/right asymmetry of that band) | nearest hairstyle by tag distance among styles tagged for the chosen base; ties broken by volume |
-| `brows` | brow landmark contours: mean vertical thickness ÷ face height → `thickness`; angle of the outer third vs inner third → shape | shape from 4 presets, thickness 0..1 |
-| `base` | not inferred | default `'a'`; the Reveal screen shows a one-tap toggle. |
-| `extras` | not detected in v1 | toggles in the editor |
+| Attribute     | Source                                                                                                                                                                                                                                                                                                                                 | Mapping                                                                                                                      |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `skin`        | face-skin mask pixels converted to OKLab; drop the darkest and brightest 20% by L; median                                                                                                                                                                                                                                              | hex. Shade colour for MToon is derived (L −0.18, chroma +10%).                                                               |
+| `hairColor`   | hair mask pixels, brighter half by L; median in OKLab                                                                                                                                                                                                                                                                                  | hex. If hair mask area < 2% of face box area → `hair: 'none'` suggested and colour defaults to a neutral derived from brows. |
+| `eyeColor`    | iris landmarks (468–477), disc of radius 0.6 × iris radius, median in OKLab                                                                                                                                                                                                                                                            | snapped to the nearest of 6 presets                                                                                          |
+| `lipTint`     | lip-region landmarks polygon; median                                                                                                                                                                                                                                                                                                   | hex, applied at 35% strength                                                                                                 |
+| `faceShape.*` | landmarks transformed by the inverse facial transformation matrix (pose-normalised), ratios: face width ÷ face height, jaw width ÷ cheekbone width, chin length ÷ face height, nose width ÷ face width, nose length ÷ face height, inter-pupil distance ÷ face width, eye height ÷ eye width, (upper + lower lip height) ÷ face height | z-score against calibration mean/std → clamp −1..1 → ×0.8 so extremes stay stylised                                          |
+| `hair`        | hair mask geometry relative to the face box: length class (lowest hair pixel above chin / between chin and shoulder line / below), volume (hair area ÷ face area, 3 bins), bangs (coverage of the forehead band between brow line and face-box top > 40%), parting side (left/right asymmetry of that band)                            | nearest hairstyle by tag distance among styles tagged for the chosen base; ties broken by volume                             |
+| `brows`       | brow landmark contours: mean vertical thickness ÷ face height → `thickness`; angle of the outer third vs inner third → shape                                                                                                                                                                                                           | shape from 4 presets, thickness 0..1                                                                                         |
+| `base`        | not inferred                                                                                                                                                                                                                                                                                                                           | default `'a'`; the Reveal screen shows a one-tap toggle.                                                                     |
+| `extras`      | not detected in v1                                                                                                                                                                                                                                                                                                                     | toggles in the editor                                                                                                        |
 
 Calibration: means and standard deviations for the eight ratios come from a set of 30–50 frontal photos (free-licence stock such as Unsplash/Pexels plus friends with consent). Only the derived statistics ship, in `analysis/calibration.json`, with a script to recompute them.
 
@@ -159,12 +168,18 @@ Catalogue entry:
 
 ```ts
 type Garment = {
-  id: string; slot: Slot; name: string; thumb: string; base: 'a' | 'b';
+  id: string;
+  slot: Slot;
+  name: string;
+  thumb: string;
+  base: 'a' | 'b';
   collection: 'everyday' | 'street' | 'cosplay' | 'heroine' | 'halloween';
-  covers: Region[];            // body regions made transparent while worn
-  colorable: boolean; palette?: string[];   // tint presets when colorable
-  hidesHair?: boolean;         // head items
-  heelHeight?: number; heelAngle?: number;  // shoes, metres and degrees
+  covers: Region[]; // body regions made transparent while worn
+  colorable: boolean;
+  palette?: string[]; // tint presets when colorable
+  hidesHair?: boolean; // head items
+  heelHeight?: number;
+  heelAngle?: number; // shoes, metres and degrees
   tags: string[];
 };
 ```
@@ -177,12 +192,12 @@ Shoes: `heelHeight` raises the hips by that amount in standing poses; `heelAngle
 
 Collections and v1 inventory, per base (two bases → double):
 
-| Collection | Items | Examples (all original designs) |
-|---|---|---|
-| Everyday | 4 tops, 4 bottoms, 2 full, 3 shoes, 2 outer, 2 head | tee, shirt, knit, hoodie; jeans, chinos, skirt, joggers; dress, jumpsuit; sneakers, boots, heels; jacket, coat; cap, beanie |
-| Cosplay & anime | 2 full, 1 top, 1 bottom, 1 outer, 1 head, 1 shoes | magical-girl dress, sailor-collar uniform set, maid-café apron set, shrine-maiden robes, idol stage top, ninja wrap, yukata, knee boots |
-| Super-heroine | 2 full, 1 outer, 1 head, 1 shoes | two original suits with emblem placeholders, cape, domino mask, armoured boots; colourable |
-| Halloween | 3 full, 1 outer, 1 head, 1 shoes | witch dress, vampire gown, devil set, cat set, pirate set; cloak; hat/horns/ears; boots |
+| Collection      | Items                                               | Examples (all original designs)                                                                                                         |
+| --------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Everyday        | 4 tops, 4 bottoms, 2 full, 3 shoes, 2 outer, 2 head | tee, shirt, knit, hoodie; jeans, chinos, skirt, joggers; dress, jumpsuit; sneakers, boots, heels; jacket, coat; cap, beanie             |
+| Cosplay & anime | 2 full, 1 top, 1 bottom, 1 outer, 1 head, 1 shoes   | magical-girl dress, sailor-collar uniform set, maid-café apron set, shrine-maiden robes, idol stage top, ninja wrap, yukata, knee boots |
+| Super-heroine   | 2 full, 1 outer, 1 head, 1 shoes                    | two original suits with emblem placeholders, cape, domino mask, armoured boots; colourable                                              |
+| Halloween       | 3 full, 1 outer, 1 head, 1 shoes                    | witch dress, vampire gown, devil set, cat set, pirate set; cloak; hat/horns/ears; boots                                                 |
 
 Total ≈ 17 + 7 + 5 + 6 = 35 items per base, 70 total. The everyday collection is required for launch; themed collections can ship with fewer items if asset work runs long. `colorable` palettes are the cheap way to add variety. The wardrobe UI filters by current `base`, groups by collection, and shows slot chips.
 
@@ -194,8 +209,11 @@ Poses are static. A pose file is JSON:
 
 ```ts
 type Pose = {
-  id: string; name: string; category: 'standing' | 'sitting' | 'lying' | 'action' | 'dance' | 'editorial';
-  tags: string[]; thumb: string;
+  id: string;
+  name: string;
+  category: 'standing' | 'sitting' | 'lying' | 'action' | 'dance' | 'editorial';
+  tags: string[];
+  thumb: string;
   hips: { position: [number, number, number]; rotation: [number, number, number, number] };
   bones: Partial<Record<VRMHumanBoneName, [number, number, number, number]>>; // local quaternions, normalised bones
   expression?: AvatarParams['expression'];
@@ -254,16 +272,16 @@ Licensing: `assets/LICENSES.md` lists every item, source and licence. VRoid Stud
 
 ## 14. Error handling
 
-| Situation | Behaviour |
-|---|---|
-| No face, face too small or turned | Message with tips; "Start from a default avatar". |
-| Several faces | Largest chosen; crop shown. |
-| Model download fails | Retry button; after two failures offer the default avatar. |
-| WebGL2 unavailable | Static message with supported browsers list. |
-| WebGL context lost | Renderer recreated on `webglcontextrestored`; params reapplied. |
-| Garment/hair/pose load fails | Previous item kept; toast. |
-| Invalid or old share link | Migrate by `version`; if impossible, reset to default avatar with a message. |
-| Low memory / low-end device | Pixel ratio ≤2; garments lazy-loaded; textures and geometry disposed on swap. |
+| Situation                         | Behaviour                                                                     |
+| --------------------------------- | ----------------------------------------------------------------------------- |
+| No face, face too small or turned | Message with tips; "Start from a default avatar".                             |
+| Several faces                     | Largest chosen; crop shown.                                                   |
+| Model download fails              | Retry button; after two failures offer the default avatar.                    |
+| WebGL2 unavailable                | Static message with supported browsers list.                                  |
+| WebGL context lost                | Renderer recreated on `webglcontextrestored`; params reapplied.               |
+| Garment/hair/pose load fails      | Previous item kept; toast.                                                    |
+| Invalid or old share link         | Migrate by `version`; if impossible, reset to default avatar with a message.  |
+| Low memory / low-end device       | Pixel ratio ≤2; garments lazy-loaded; textures and geometry disposed on swap. |
 
 ## 15. Testing
 
