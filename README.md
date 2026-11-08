@@ -22,3 +22,13 @@ Implementation plans live in `docs/superpowers/plans/`.
 | `npm run typecheck`  | `tsc -b` over app, tests and e2e            |
 | `npm test`           | Vitest unit tests (`tests/`)                |
 | `npm run test:watch` | Vitest in watch mode                        |
+
+## Assets
+
+Large binary assets are not committed. After cloning, fetch the development placeholder avatar:
+
+```bash
+./tools/fetch-placeholder-vrm.sh
+```
+
+Licences for every third-party asset are listed in [`assets/LICENSES.md`](assets/LICENSES.md).
