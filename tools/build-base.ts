@@ -12,6 +12,7 @@ import { readGlb, writeGlb } from './glb/glb';
 import { pruneUnused } from './glb/prune';
 import { removeHair } from './glb/removeHair';
 import { sparsifyMorphTargets } from './glb/sparsify';
+import { convertImagesToWebp } from './glb/webp';
 import {
   getImage,
   neutralizeImage,
@@ -69,40 +70,6 @@ export function loadMorphVariants(dir: string): MorphVariant[] {
     });
 }
 
-type SharpFactory = (input: Buffer) => {
-  webp(opts: { quality: number }): { toBuffer(): Promise<Buffer> };
-};
-
-async function toWebp(doc: GlbDoc): Promise<boolean> {
-  let sharp: SharpFactory;
-  try {
-    sharp = ((await import('sharp')) as unknown as { default: SharpFactory }).default;
-  } catch {
-    console.warn('--webp requested but `sharp` is not installed; keeping PNG textures');
-    return false;
-  }
-  for (const image of doc.json.images) {
-    if (!image.name || image.bufferView === undefined) continue;
-    const webp = new Uint8Array(
-      await sharp(Buffer.from(getImage(doc, image.name)))
-        .webp({ quality: 90 })
-        .toBuffer(),
-    );
-    replaceImage(doc, image.name, webp);
-    image.mimeType = 'image/webp';
-  }
-  doc.json.extensionsUsed = Array.from(
-    new Set([...(doc.json.extensionsUsed ?? []), 'EXT_texture_webp']),
-  );
-  for (const texture of doc.json.textures) {
-    texture.extensions = {
-      ...(texture.extensions ?? {}),
-      EXT_texture_webp: { source: texture.source },
-    };
-  }
-  return true;
-}
-
 export async function buildBase(opts: {
   src: string;
   out: string;
@@ -118,7 +85,7 @@ export async function buildBase(opts: {
   const variants = loadMorphVariants(opts.morphs ?? path.join(opts.src, 'morphs'));
   doc = addMorphTargets(doc, variants);
   doc = sparsifyMorphTargets(doc);
-  if (opts.webp) await toWebp(doc);
+  if (opts.webp) await convertImagesToWebp(doc);
   doc = pruneUnused(doc);
   const bytes = writeGlb(doc);
   fs.mkdirSync(path.dirname(opts.out), { recursive: true });

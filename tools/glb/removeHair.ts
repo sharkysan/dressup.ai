@@ -1,9 +1,6 @@
+import { isHairJointName, isHairMaterialName, isHairMeshName } from './hairNames';
 import { pruneUnused } from './prune';
 import type { GlbDoc } from './types';
-
-const HAIR_MESH = 'Hair';
-const HAIR_MATERIAL_SUFFIX = '_HAIR';
-const HAIR_JOINT_PREFIX = 'J_Sec_Hair';
 
 /**
  * Strips VRoid hair: the 'Hair' mesh (node keeps its slot, mesh reference removed), Body
@@ -15,7 +12,7 @@ export function removeHair(input: GlbDoc): GlbDoc {
 
   const hairMeshIndices = new Set<number>();
   json.meshes.forEach((m: { name?: string }, i: number) => {
-    if (m.name === HAIR_MESH) hairMeshIndices.add(i);
+    if (isHairMeshName(m.name)) hairMeshIndices.add(i);
   });
   for (const node of json.nodes) {
     if (node.mesh !== undefined && hairMeshIndices.has(node.mesh)) {
@@ -50,13 +47,11 @@ export function removeHair(input: GlbDoc): GlbDoc {
   for (const mesh of json.meshes) {
     mesh.primitives = mesh.primitives.filter(
       (p: { material?: number }) =>
-        p.material === undefined ||
-        !String(json.materials[p.material].name ?? '').endsWith(HAIR_MATERIAL_SUFFIX),
+        p.material === undefined || !isHairMaterialName(json.materials[p.material].name),
     );
   }
 
-  const isHairJoint = (node: number) =>
-    String(json.nodes[node]?.name ?? '').startsWith(HAIR_JOINT_PREFIX);
+  const isHairJoint = (node: number) => isHairJointName(json.nodes[node]?.name);
   const springBone = json.extensions?.VRMC_springBone;
   if (springBone?.springs) {
     springBone.springs = springBone.springs.filter(

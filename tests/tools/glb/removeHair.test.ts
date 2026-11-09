@@ -38,3 +38,16 @@ test('VRM 0.x: remaps blend-shape mesh binds, drops hair bone groups and stale m
     out.json.materials.map((m: { name: string }) => m.name),
   );
 });
+
+test('detects lowercase non-VRoid hair naming', () => {
+  const doc = makeGlb({ withHair: true });
+  doc.json.meshes.find((m: { name: string }) => m.name === 'Hair').name = 'hair_tail';
+  doc.json.materials.find((m: { name: string }) => m.name === 'HairBack_00_HAIR').name =
+    'hair_back';
+  const out = removeHair(doc);
+  expect(out.json.materials.map((m: { name: string }) => m.name)).toEqual([
+    'Body_00_SKIN',
+    'Tops_01_CLOTH',
+    'Face_00_SKIN',
+  ]);
+});
