@@ -35,7 +35,8 @@ const TARGET_MEDIAN: Record<NeutralizeMode, number> = { divideByMedian: 0.85, lu
  * Prepares a texture for runtime tinting (spec §7).
  * - divideByMedian: divides each channel by the median colour of opaque pixels and scales so the
  *   median lands at 0.85 — keeps blush/shading detail, removes the painted base tone (skin).
- * - luminance: Rec.709 grey, scaled so the median lands at 0.75 (hair, iris).
+ * - luminance: Rec.709 grey, scaled so the median lands at 0.75 (hair, brows, lashes); a texture
+ *   that is black where opaque becomes flat 0.75 grey.
  */
 export function neutralizeImage(png: Uint8Array, mode: NeutralizeMode): Uint8Array {
   const img = PNG.sync.read(Buffer.from(png));
@@ -60,9 +61,12 @@ export function neutralizeImage(png: Uint8Array, mode: NeutralizeMode): Uint8Arr
     }
   } else {
     const lum = (i: number) => 0.2126 * data[i]! + 0.7152 * data[i + 1]! + 0.0722 * data[i + 2]!;
-    const med = Math.max(median(lum), 1);
+    const med = median(lum);
+    // Black where opaque (MakeHuman's brows and lashes): the shape is all in alpha and there is no
+    // shading to keep, so the texture turns flat grey rather than amplifying near-zero noise.
+    const black = med < 1;
     for (let i = 0; i < data.length; i += 4) {
-      const g = clamp255((lum(i) / med) * target);
+      const g = black ? clamp255(target) : clamp255((lum(i) / med) * target);
       data[i] = g;
       data[i + 1] = g;
       data[i + 2] = g;
@@ -117,6 +121,43 @@ export function resizeAllImages(doc: GlbDoc, maxSize: number): void {
     const resized = resizeImage(png, maxSize);
     if (resized !== png) replaceImageAt(doc, index, resized);
   });
+}
+
+/**
+ * Downscales each image a material uses so neither side exceeds `maxFor(imageName, materialName)`; an
+ * image several materials share keeps the largest size any of them allows. Images no material uses are
+ * left alone (prune drops them).
+ */
+export function resizeImages(
+  doc: GlbDoc,
+  maxFor: (imageName: string, materialName: string) => number,
+): void {
+  const limits = new Map<number, number>();
+  for (const material of doc.json.materials) {
+    for (const index of textureIndices(material)) {
+      const source: number | undefined = doc.json.textures[index]?.source;
+      if (source === undefined) continue;
+      const limit = maxFor(doc.json.images[source]?.name ?? '', material.name ?? '');
+      limits.set(source, Math.max(limits.get(source) ?? 0, limit));
+    }
+  }
+  for (const [index, maxSize] of limits) {
+    const image = doc.json.images[index];
+    if (image?.bufferView === undefined) continue;
+    const bv = doc.json.bufferViews[image.bufferView]!;
+    const start = bv.byteOffset ?? 0;
+    const png = doc.bin.subarray(start, start + bv.byteLength);
+    const resized = resizeImage(png, maxSize);
+    if (resized !== png) replaceImageAt(doc, index, resized);
+  }
+}
+
+/** The texture indices a material references: every `…Texture: { index }`, extensions included. */
+function textureIndices(node: unknown, key = ''): number[] {
+  if (typeof node !== 'object' || node === null) return [];
+  const { index } = node as { index?: unknown };
+  if (key.endsWith('Texture') && typeof index === 'number') return [index];
+  return Object.entries(node).flatMap(([k, v]) => textureIndices(v, k));
 }
 
 /** Replaces the bytes of the image at `index` (by position, so unnamed/duplicate names are safe). */

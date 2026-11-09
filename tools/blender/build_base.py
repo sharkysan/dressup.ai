@@ -7,12 +7,15 @@ materials, eyes, brows, lashes, teeth and tongue, the VRM expressions happy, rel
 blinkLeft baked from faceunits01 (targets.py), the body-shape shape keys baked from MakeHuman probes
 (bake.py), every object and material named per the contract that tools/build-base.ts writes from
 src/avatar/baseContract.ts. Writes <work>/base.json: the Body's height and lowest point, and how much
-each body target changes them (baseMetaSchema). Exits 1 if any step or the export fails.
+each body target changes them (baseMetaSchema); <work>/regions.png and <work>/baselayer.png, the region-ID
+map and the base layer in the Body's UV layout; and <work>/eyes/<preset>.png, one eye texture per
+eye-colour preset. Exits 1 if any step or the export fails.
 """
 
 import argparse
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -22,7 +25,20 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from bake import anchored, head_mask, height_and_min, masked_delta  # noqa: E402
+from bake import (  # noqa: E402
+    REGION_CODES,
+    anchored,
+    classify_regions,
+    darken,
+    disc_weights,
+    face_regions,
+    head_mask,
+    height_and_min,
+    masked_delta,
+    png_bytes,
+    rasterise,
+    widen,
+)
 from mpfb import mpfb_service, require_toolchain  # noqa: E402
 from targets import EXPRESSION_RECIPES, mix, parse_target, to_blender  # noqa: E402
 
@@ -155,6 +171,48 @@ HEAD_WEIGHT_STILL = 0.999
 HEAD_STILL_M = 1e-6
 # An unchanged probe must reproduce the base this closely, or every body delta is polluted.
 PROBE_TOLERANCE_M = 1e-5
+
+# The base layer (spec §3), painted over the skin at runtime: a fitted undershirt on the torso faces and
+# shorts on the pelvis faces, opaque, transparent everywhere else. 2048², the Skin texture's size.
+UNDERSHIRT_RGBA = (0xE9, 0xE6, 0xE1, 255)
+SHORTS_RGBA = (0x2F, 0x2F, 0x33, 255)
+BASE_LAYER_SIZE = 2048
+# The region-ID map (spec §7): R = the region code of the face under each pixel, 0 = never hidden.
+REGIONS_SIZE = 1024
+# The shorts' hem (spec §5): thigh vertices above it are pelvis. The crotch is the lowest midline vertex
+# in the pelvis vertex group; midline vertices are within MIDLINE_M of x = 0.
+HEM_BELOW_CROTCH_M = 0.08
+MIDLINE_M = 1e-4
+# Pixels each map grows every UV island by into the texels no face covers, so that a sample on a UV seam
+# (the back's midline, the crotch) blends the island with itself, not with what lies outside it: without
+# it, filtering draws a line of skin down the back of the undershirt and shorts. 8 px of 2048² holds down
+# to the 256² mip level. Islands that meet in a gutter split it; no island's own texels are painted over.
+MAP_MARGIN_PX = {BASE_LAYER_SIZE: 8, REGIONS_SIZE: 4}
+
+# Eye-colour preset (src/catalog/params.ts) -> (MakeHuman eye texture in <MPFB data>/eyes/materials, the
+# scale its iris's HSV value takes). Each preset takes the texture whose iris hue (the median of the iris
+# disc) is nearest its reference colour's (src/avatar/eyeColors.ts):
+#   brown 27°, darkBrown 23°, hazel 40° -> brownlight 33° (MakeHuman's "brown" is a red mahogany, 8°)
+#   green 109° -> green 109°
+#   blue 214° -> lightblue 188°: blue (189°) and deepblue (237°, violet) are as near in hue; lightblue has
+#     the preset's value (0.69) and is the nearest in OKLab
+#   grey (achromatic, saturation 0.11) -> grey (0.11)
+# Presets that share a texture are kept distinct: the lightest keeps it as it is, the darker ones lower the
+# iris's value in the ratio of their reference values (brown 0.42 / hazel 0.56, darkBrown 0.23 / 0.56).
+EYE_PRESETS = {
+    "brown": ("brownlight", 0.75),
+    "darkBrown": ("brownlight", 0.41),
+    "hazel": ("brownlight", 1.0),
+    "green": ("green", 1.0),
+    "blue": ("lightblue", 1.0),
+    "grey": ("grey", 1.0),
+}
+# The two iris discs of MakeHuman's 1024² eye textures (image-space UVs), from a circle fit to the limbus
+# of brownlight_eye.png: centres (721, 305) and (301, 718) px, radius 122 px. A darkened iris fades out
+# from 120 to 126 px; the sclera and the cornea's alpha-0 disc are outside and keep their pixels.
+IRIS_CENTRES = ((721.2 / 1024, 304.8 / 1024), (300.7 / 1024, 718.3 / 1024))
+IRIS_RADIUS = 120 / 1024
+IRIS_FEATHER = 6 / 1024
 
 VRM_NAME = "Kiss base"
 VRM_AUTHOR = "Kiss"
@@ -377,12 +435,13 @@ def probe(change):
         evaluated.to_mesh_clear()
         if len(coords) != len(basemesh.data.vertices):
             raise RuntimeError(f"probe {change}: evaluated to {len(coords)} vertices, not the full mesh")
-        return coords
     finally:
         bpy.data.batch_remove(datablocks() - before)
-        leftover = datablocks() - before
-        if leftover:
-            raise RuntimeError(f"probe {change} left {sorted(block.name for block in leftover)} behind")
+    # Checked only once the probe succeeded, so a failing probe's own error is the one reported.
+    leftover = datablocks() - before
+    if leftover:
+        raise RuntimeError(f"probe {change} left {sorted(block.name for block in leftover)} behind")
+    return coords
 
 
 def combine(a, b):
@@ -443,6 +502,10 @@ def bake_body_shapes(contract, basemesh):
         dh = meta["morphHeightDelta"][name] = morph_height - height
         dmin = meta["morphMinYDelta"][name] = morph_lowest - lowest
         moved = np.linalg.norm(delta, axis=1)
+        if not (moved > HEAD_STILL_M).any():
+            # A probe that changes nothing: a renamed or mistyped MPFB macro or target would otherwise
+            # ship an all-zero morph.
+            raise RuntimeError(f"body target {name}: its probe {BODY_PROBES[name]} moves no vertex")
         print(
             f"build_base: {name}: moves {np.count_nonzero(moved > HEAD_STILL_M)} vertices up to "
             f"{moved.max() * 1000:.1f} mm (head held still by {shift * 1000:.1f} mm); "
@@ -485,6 +548,107 @@ def delete_helper_vertices(basemesh):
         if vertex_group.name in HELPER_GROUPS:
             basemesh.vertex_groups.remove(vertex_group)
     return len(doomed)
+
+
+def bone_weights(obj, rig):
+    """{bone: (N,) weights} for each of the rig's deform bones that is one of obj's vertex groups."""
+    bones = [bone.name for bone in rig.data.bones if bone.use_deform and bone.name in obj.vertex_groups]
+    columns = {obj.vertex_groups[name].index: column for column, name in enumerate(bones)}
+    weights = np.zeros((len(obj.data.vertices), len(bones)))
+    for vertex in obj.data.vertices:
+        for element in vertex.groups:
+            if element.group in columns:
+                weights[vertex.index, columns[element.group]] = element.weight
+    return {name: weights[:, column] for column, name in enumerate(bones)}
+
+
+def uv_faces(mesh):
+    """(each polygon's vertex indices, each polygon's UVs in image space), from mesh's only UV map. Blender's
+    v points up; image rows, and the glTF exporter's v, point down."""
+    if len(mesh.uv_layers) != 1:
+        raise RuntimeError(f"{mesh.name}: expected one UV map, found {[uv.name for uv in mesh.uv_layers]}")
+    uv = np.empty(2 * len(mesh.loops))
+    mesh.uv_layers[0].data.foreach_get("uv", uv)
+    uv = uv.reshape(-1, 2) * [1, -1] + [0, 1]
+    loop_vertices = np.empty(len(mesh.loops), dtype=np.int64)
+    mesh.loops.foreach_get("vertex_index", loop_vertices)
+    starts = np.empty(len(mesh.polygons), dtype=np.int64)
+    totals = np.empty(len(mesh.polygons), dtype=np.int64)
+    mesh.polygons.foreach_get("loop_start", starts)
+    mesh.polygons.foreach_get("loop_total", totals)
+    spans = [slice(start, start + total) for start, total in zip(starts, totals, strict=True)]
+    return [loop_vertices[span] for span in spans], [uv[span] for span in spans]
+
+
+def bake_maps(contract, body, rig, work):
+    """Writes <work>/regions.png (R = region code, REGIONS_SIZE²) and <work>/baselayer.png (undershirt and
+    shorts, BASE_LAYER_SIZE² RGBA) in the Body's UV layout: each vertex takes its dominant bone's region,
+    each face its vertices' majority (bake.py)."""
+    if contract["regions"] != REGION_CODES:
+        raise RuntimeError(f"contract regions {contract['regions']} != bake.py's {REGION_CODES}")
+    weights = bone_weights(body, rig)
+    coords = coords_array(body.data.vertices)
+    crotch = coords[(weights["pelvis"] > 0) & (np.abs(coords[:, 0]) <= MIDLINE_M), 2]
+    if len(crotch) == 0:
+        raise RuntimeError(f"{body.name}: no midline vertex in the pelvis group")
+    hem_z = crotch.min() - HEM_BELOW_CROTCH_M
+    vertex_codes = classify_regions(weights, coords[:, 2], hem_z)
+    faces, uvs = uv_faces(body.data)
+    face_codes = face_regions(vertex_codes, faces)
+    counts = np.bincount(face_codes, minlength=len(REGION_CODES) + 1)
+    names = {code: region for region, code in REGION_CODES.items()} | {0: "never hidden"}
+    print(
+        f"build_base: hem at z {hem_z:.3f} m (crotch {crotch.min():.3f} m); faces per region: "
+        + ", ".join(f"{names[code]} {count}" for code, count in enumerate(counts))
+    )
+
+    def region_map(size):
+        # Faces as code + 1, so that 0 is a pixel no face covers and every island (region 0's too) grows.
+        ids = widen(rasterise(uvs, face_codes + 1, size), MAP_MARGIN_PX[size])
+        return np.maximum(ids.astype(np.int16) - 1, 0).astype(np.uint8)
+
+    regions = np.zeros((REGIONS_SIZE, REGIONS_SIZE, 3), dtype=np.uint8)
+    regions[..., 0] = region_map(REGIONS_SIZE)
+    (work / "regions.png").write_bytes(png_bytes(regions))
+
+    codes = region_map(BASE_LAYER_SIZE)
+    layer = np.zeros((BASE_LAYER_SIZE, BASE_LAYER_SIZE, 4), dtype=np.uint8)
+    layer[codes == REGION_CODES["torso"]] = UNDERSHIRT_RGBA
+    layer[codes == REGION_CODES["pelvis"]] = SHORTS_RGBA
+    (work / "baselayer.png").write_bytes(png_bytes(layer))
+    print(f"build_base: wrote {work / 'regions.png'} and {work / 'baselayer.png'}")
+
+
+def read_png(path):
+    """An image file's pixels as a (rows, columns, 4) uint8 array, row 0 at the top."""
+    image = bpy.data.images.load(str(path), check_existing=False)
+    try:
+        width, height = image.size
+        pixels = np.empty(width * height * 4, dtype=np.float32)
+        image.pixels.foreach_get(pixels)
+    finally:
+        bpy.data.images.remove(image)
+    # Blender stores rows bottom-up; a byte image's pixels are its bytes / 255.
+    return np.flipud(np.round(pixels.reshape(height, width, 4) * 255).astype(np.uint8))
+
+
+def write_eye_textures(work):
+    """Writes <work>/eyes/<preset>.png for each EYE_PRESETS entry: its MakeHuman eye texture, with the iris
+    darkened where the preset says so."""
+    materials = mpfb_data() / "eyes" / "materials"
+    out = work / "eyes"
+    out.mkdir(exist_ok=True)
+    for preset, (texture, value) in EYE_PRESETS.items():
+        source = materials / f"{texture}_eye.png"
+        if value == 1.0:
+            shutil.copyfile(source, out / f"{preset}.png")
+            continue
+        rgba = read_png(source)
+        if rgba.shape[0] != rgba.shape[1]:
+            raise RuntimeError(f"{source.name}: expected a square texture, got {rgba.shape[1::-1]}")
+        iris = disc_weights(rgba.shape[0], IRIS_CENTRES, IRIS_RADIUS, IRIS_FEATHER)
+        (out / f"{preset}.png").write_bytes(png_bytes(darken(rgba, iris, value)))
+    print(f"build_base: wrote {len(EYE_PRESETS)} eye textures to {out}")
 
 
 def single_material(obj):
@@ -614,6 +778,8 @@ def main():
     removed = delete_helper_vertices(basemesh)
     print(f"build_base: removed {removed} helper vertices")
     assert_head_still(contract, basemesh)
+    bake_maps(contract, basemesh, rig, args.work)
+    write_eye_textures(args.work)
 
     rename(contract, basemesh, proxies)
     set_alpha_modes(contract, basemesh, proxies)
