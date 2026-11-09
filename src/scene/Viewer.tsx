@@ -1,6 +1,7 @@
 import { OrbitControls } from '@react-three/drei';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useEffect } from 'react';
+import { loadCatalog } from '../catalog/catalog';
 import { AvatarModel } from '../avatar/AvatarModel';
 import { BASE_A_URL } from '../avatar/loadVrm';
 import { useAppStore } from '../store/useAppStore';
@@ -21,6 +22,13 @@ const BACKDROP_COLOR = '#e9e5dc';
 
 export function Viewer() {
   const status = useAppStore((s) => s.avatarStatus);
+  const setCatalog = useAppStore((s) => s.setCatalog);
+
+  useEffect(() => {
+    loadCatalog()
+      .then(setCatalog)
+      .catch((error: unknown) => console.warn('catalog unavailable; hairstyles disabled:', error));
+  }, [setCatalog]);
 
   return (
     <div
