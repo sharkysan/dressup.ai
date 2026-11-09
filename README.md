@@ -24,6 +24,8 @@ Implementation plans live in `docs/superpowers/plans/`.
 | `npm run typecheck`  | `tsc -b` over app, tests and e2e            |
 | `npm test`           | Vitest unit tests (`tests/`)                |
 | `npm run test:watch` | Vitest in watch mode                        |
+| `npm run e2e`        | Playwright end-to-end tests (`e2e/`)        |
+| `npm run lineup`     | Batch photos → avatars → lineup sheets      |
 
 ## Assets
 
@@ -39,6 +41,25 @@ npm run assets          # rebuild from your own sources in assets/source/
 eight face-shape morph pairs from `morphs/<param>.{min,max}.vrm`, stores morph targets sparsely and
 textures as WebP ≤1024². Licences for every third-party asset are listed in
 [`assets/LICENSES.md`](assets/LICENSES.md).
+
+## Face analysis
+
+Photos are analysed entirely in the browser (MediaPipe Face Landmarker + selfie segmenter); the
+image never leaves the device and is never persisted. The models are self-hosted and git-ignored:
+
+```bash
+npm run assets:models   # downloads the two models to public/models/ and copies the wasm
+```
+
+- **Debug page:** `#analysis` shows every intermediate — head pose, face box, the eight ratios and
+  their z-scores, hair tags and candidate hairstyles, colour swatches — next to the live avatar.
+  _Record fixture_ saves landmarks and masks (no pixels) for unit tests.
+- **Calibration:** `src/analysis/calibration.json` holds the ratio means/stds that z-scores are
+  measured against. It is seeded from the canonical face model (`npm run calibrate:canonical`);
+  replace it from real consented photos via _Add to calibration set_ → _Export calibration.json_.
+- **Lineup test:** the M1 likeness gate. `npm run lineup -- --photos DIR --out lineup-out` builds
+  numbered sheets for a blind judge; protocol and pass mark in
+  [`docs/superpowers/m1-lineup-test.md`](docs/superpowers/m1-lineup-test.md).
 
 ## Running the checks
 
