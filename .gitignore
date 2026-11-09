@@ -38,3 +38,7 @@ assets/source/**/*.vrm
 public/assets/**/*.vrm
 public/assets/**/*.glb
 public/assets/catalog.json
+
+# self-hosted MediaPipe runtime and models (npm run assets:models)
+public/models/
+public/mediapipe/

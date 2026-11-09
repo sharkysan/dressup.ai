@@ -18,9 +18,10 @@
     "assets:synth": "tsx tools/synth-variants.ts --src assets/source/base-a/neutral.vrm --out assets/source/base-a/morphs",
     "assets:base": "tsx tools/build-base.ts --src assets/source/base-a --out public/assets/avatars/base-a.vrm --webp",
     "assets": "npm run assets:base && npm run assets:hair && npm run assets:catalog",
-    "assets:dev": "npm run assets:fetch-dev && npm run assets:synth && npm run assets",
+    "assets:dev": "npm run assets:fetch-dev && npm run assets:synth && npm run assets:models && npm run assets",
     "assets:hair": "tsx tools/build-hair.ts --src assets/source/hair --out public/assets/hair --webp",
-    "assets:catalog": "tsx tools/build-catalog.ts --source assets/source --public public/assets --out public/assets/catalog.json"
+    "assets:catalog": "tsx tools/build-catalog.ts --source assets/source --public public/assets --out public/assets/catalog.json",
+    "assets:models": "./tools/fetch-models.sh && tsx tools/copy-mediapipe-wasm.ts"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.2.2",
