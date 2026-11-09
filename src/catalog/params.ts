@@ -5,7 +5,22 @@ export const SLOTS = ['top', 'bottom', 'full', 'shoes', 'outer', 'head'] as cons
 export type Slot = (typeof SLOTS)[number];
 
 /** Body regions a garment can hide (spec §7/§8). */
-export type Region = 'torso' | 'upperArms' | 'forearms' | 'thighs' | 'calves' | 'feet' | 'neck';
+export type Region =
+  'torso' | 'pelvis' | 'upperArms' | 'forearms' | 'thighs' | 'calves' | 'feet' | 'neck';
+
+/** Body-shape morph sliders, each -1..1 (spec §5). Blender shape keys are named by baseContract. */
+export const BODY_MORPHS = [
+  'gender',
+  'weight',
+  'muscle',
+  'shoulders',
+  'bust',
+  'waist',
+  'hips',
+  'legLength',
+  'armLength',
+] as const;
+export type BodyMorph = (typeof BODY_MORPHS)[number];
 
 const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'expected a #rrggbb colour');
 const signedUnit = z.number().min(-1).max(1);
