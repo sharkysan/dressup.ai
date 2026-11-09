@@ -181,7 +181,7 @@ function paintCategories(
     MASK.clothes,
   );
   if (hair.length === 'none') return;
-  const strip = { low: 0.12, medium: 0.25, high: 0.45 }[hair.volume ?? 'medium'] * box.width;
+  const strip = { low: 0.08, medium: 0.22, high: 0.45 }[hair.volume ?? 'medium'] * box.width;
   const top = box.y - box.height * 0.35;
   const bottom =
     hair.length === 'short'
@@ -197,7 +197,7 @@ function paintCategories(
     box.x - strip,
     top,
     box.x + box.width + strip,
-    box.y + box.height * 0.08,
+    box.y + box.height * 0.02,
     MASK.hair,
   );
   // Side strips down to the length.
