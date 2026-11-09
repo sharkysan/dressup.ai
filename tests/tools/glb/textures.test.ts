@@ -51,6 +51,55 @@ test('divideByMedian lifts a skin texture to a neutral tone and keeps alpha', ()
   expect(out.data[3]).toBe(255);
 });
 
+/** A 1-row PNG of the given RGBA pixels. */
+function rowPng(pixels: number[][]): Uint8Array {
+  const img = new PNG({ width: pixels.length, height: 1 });
+  pixels.forEach((p, i) => img.data.set(p, i * 4));
+  return new Uint8Array(PNG.sync.write(img));
+}
+const repeat = (n: number, p: number[]) => Array.from({ length: n }, () => p);
+
+test('divideByMedian measures the tone on the covered texels only, not the UV gutter', () => {
+  // Most texels are gutter (no face covers them), a darker, redder fill: measured with it, the skin
+  // would keep a colour cast instead of turning neutral grey.
+  const skin = [200, 150, 130, 255] as [number, number, number, number];
+  const png = rowPng([...repeat(3, skin), ...repeat(7, [90, 60, 50, 255])]);
+  const coverage = rowPng([...repeat(3, [255, 0, 0, 255]), ...repeat(7, [0, 0, 0, 255])]);
+  const level = Math.round(0.85 * 255);
+  expect([
+    ...decodePng(neutralizeImage(png, 'divideByMedian', { coverage })).data.slice(0, 4),
+  ]).toEqual([level, level, level, 255]);
+  const [r, g, b] = decodePng(neutralizeImage(png, 'divideByMedian')).data;
+  expect(r === g && g === b).toBe(false);
+  expect(() => neutralizeImage(png, 'divideByMedian', { coverage: solidPng(2, 2, skin) })).toThrow(
+    /size/,
+  );
+});
+
+test('divideByMedian lowers the tone only as far as keeps all but 0.5% of the texels below 255', () => {
+  const clipped = (png: Uint8Array) => {
+    const { data } = decodePng(png);
+    let n = 0;
+    for (let i = 0; i < data.length; i += 4) if (data.slice(i, i + 3).includes(255)) n++;
+    return n;
+  };
+  // 1% highlights at twice the median: at 0.85 they clip, so the tone comes down until they don't.
+  const bright = neutralizeImage(
+    rowPng([...repeat(990, [100, 80, 60, 255]), ...repeat(10, [200, 160, 120, 255])]),
+    'divideByMedian',
+  );
+  expect(clipped(bright)).toBe(0);
+  expect(decodePng(bright).data[0]).toBe(127);
+  expect(decodePng(bright).data[990 * 4]).toBe(254);
+  // 0.4% highlights may clip: the tone stays at 0.85.
+  const few = neutralizeImage(
+    rowPng([...repeat(996, [100, 80, 60, 255]), ...repeat(4, [200, 160, 120, 255])]),
+    'divideByMedian',
+  );
+  expect(clipped(few)).toBe(4);
+  expect(decodePng(few).data[0]).toBe(Math.round(0.85 * 255));
+});
+
 test('luminance produces grey pixels with the median at 0.75', () => {
   const out = decodePng(neutralizeImage(solidPng(4, 4, [120, 60, 30, 255]), 'luminance'));
   expect(out.data[0]).toBe(out.data[1]);

@@ -30,34 +30,58 @@ export function replaceImage(doc: GlbDoc, name: string, png: Uint8Array): void {
 export type NeutralizeMode = 'divideByMedian' | 'luminance';
 
 const TARGET_MEDIAN: Record<NeutralizeMode, number> = { divideByMedian: 0.85, luminance: 0.75 };
+/** divideByMedian: at most this share of the measured texels may reach 255 in any channel. */
+const MAX_CLIPPED = 0.005;
 
 /**
- * Prepares a texture for runtime tinting (spec §7).
- * - divideByMedian: divides each channel by the median colour of opaque pixels and scales so the
- *   median lands at 0.85 — keeps blush/shading detail, removes the painted base tone (skin).
+ * Prepares a texture for runtime tinting (spec §7). Measures the opaque pixels, or with `coverage` (a
+ * PNG of the same size) only those where its R is non-zero, e.g. the texels a mesh's faces cover.
+ * - divideByMedian: divides each channel by the measured pixels' median and scales so the median lands
+ *   at 0.85 — keeps blush/shading detail, removes the painted base tone (skin). Lower if needed, so
+ *   that at most 0.5% of the measured pixels reach 255 in any channel: highlights keep their detail.
  * - luminance: Rec.709 grey, scaled so the median lands at 0.75 (hair, brows, lashes); a texture
  *   that is black where opaque becomes flat 0.75 grey.
  */
-export function neutralizeImage(png: Uint8Array, mode: NeutralizeMode): Uint8Array {
+export function neutralizeImage(
+  png: Uint8Array,
+  mode: NeutralizeMode,
+  opts: { coverage?: Uint8Array } = {},
+): Uint8Array {
   const img = PNG.sync.read(Buffer.from(png));
   const { data } = img;
-  const opaque: number[] = [];
-  for (let i = 0; i < data.length; i += 4) if (data[i + 3]! > 127) opaque.push(i);
-  if (opaque.length === 0) return png;
+  const covered = opts.coverage ? PNG.sync.read(Buffer.from(opts.coverage)) : null;
+  if (covered && (covered.width !== img.width || covered.height !== img.height)) {
+    throw new Error(
+      `coverage is ${covered.width}×${covered.height}, the image ${img.width}×${img.height}: sizes differ`,
+    );
+  }
+  // Offsets of the measured pixels: opaque, and covered when a coverage map is given.
+  const measured: number[] = [];
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3]! > 127 && (!covered || covered.data[i]! > 0)) measured.push(i);
+  }
+  if (measured.length === 0) return png;
 
   const median = (pick: (i: number) => number) => {
-    const values = opaque.map(pick).sort((a, b) => a - b);
+    const values = measured.map(pick).sort((a, b) => a - b);
     return values[Math.floor(values.length / 2)]!;
   };
   const target = TARGET_MEDIAN[mode] * 255;
 
   if (mode === 'divideByMedian') {
     const med = [median((i) => data[i]!), median((i) => data[i + 1]!), median((i) => data[i + 2]!)];
+    const [r, g, b] = med.map((m) => Math.max(m, 1)) as [number, number, number];
+    // Each measured pixel's brightest channel over its median, ranked: the pixel MAX_CLIPPED from the
+    // top must land at 254 or below (254.5 would round to 255), and so must every one under it.
+    const ratios = measured
+      .map((i) => Math.max(data[i]! / r, data[i + 1]! / g, data[i + 2]! / b))
+      .sort((x, y) => x - y);
+    const limit = ratios[Math.floor(ratios.length * (1 - MAX_CLIPPED))]!;
+    const level = Math.min(target, 254 / limit);
     for (let i = 0; i < data.length; i += 4) {
-      for (let c = 0; c < 3; c++) {
-        const m = Math.max(med[c]!, 1);
-        data[i + c] = clamp255((data[i + c]! / m) * target);
-      }
+      data[i] = clamp255((data[i]! / r) * level);
+      data[i + 1] = clamp255((data[i + 1]! / g) * level);
+      data[i + 2] = clamp255((data[i + 2]! / b) * level);
     }
   } else {
     const lum = (i: number) => 0.2126 * data[i]! + 0.7152 * data[i + 1]! + 0.0722 * data[i + 2]!;

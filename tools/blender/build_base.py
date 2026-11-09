@@ -8,8 +8,9 @@ blinkLeft baked from faceunits01 (targets.py), the body-shape shape keys baked f
 (bake.py), every object and material named per the contract that tools/build-base.ts writes from
 src/avatar/baseContract.ts. Writes <work>/base.json: the Body's height and lowest point, and how much
 each body target changes them (baseMetaSchema); <work>/regions.png and <work>/baselayer.png, the region-ID
-map and the base layer in the Body's UV layout; and <work>/eyes/<preset>.png, one eye texture per
-eye-colour preset. Exits 1 if any step or the export fails.
+map and the base layer in the Body's UV layout, and <work>/coverage.png, the texels the Body's faces cover;
+and <work>/eyes/<preset>.png, one eye texture per eye-colour preset. Exits 1 if any step or the export
+fails.
 """
 
 import argparse
@@ -583,7 +584,9 @@ def uv_faces(mesh):
 def bake_maps(contract, body, rig, work):
     """Writes <work>/regions.png (R = region code, REGIONS_SIZE²) and <work>/baselayer.png (undershirt and
     shorts, BASE_LAYER_SIZE² RGBA) in the Body's UV layout: each vertex takes its dominant bone's region,
-    each face its vertices' majority (bake.py)."""
+    each face its vertices' majority (bake.py). And <work>/coverage.png (R = 255 where a face covers the
+    texel, BASE_LAYER_SIZE², the Skin texture's size): build-base.ts neutralises the skin on those texels
+    only, not on the UV gutter."""
     if contract["regions"] != REGION_CODES:
         raise RuntimeError(f"contract regions {contract['regions']} != bake.py's {REGION_CODES}")
     weights = bone_weights(body, rig)
@@ -616,7 +619,11 @@ def bake_maps(contract, body, rig, work):
     layer[codes == REGION_CODES["torso"]] = UNDERSHIRT_RGBA
     layer[codes == REGION_CODES["pelvis"]] = SHORTS_RGBA
     (work / "baselayer.png").write_bytes(png_bytes(layer))
-    print(f"build_base: wrote {work / 'regions.png'} and {work / 'baselayer.png'}")
+
+    coverage = np.zeros((BASE_LAYER_SIZE, BASE_LAYER_SIZE, 3), dtype=np.uint8)
+    coverage[..., 0] = rasterise(uvs, np.full(len(uvs), 255), BASE_LAYER_SIZE)
+    (work / "coverage.png").write_bytes(png_bytes(coverage))
+    print(f"build_base: wrote {work / 'regions.png'}, {work / 'baselayer.png'} and {work / 'coverage.png'}")
 
 
 def read_png(path):

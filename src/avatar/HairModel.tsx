@@ -4,8 +4,10 @@ import { findHair } from '../catalog/catalog';
 import { useAppStore } from '../store/useAppStore';
 import { loadGlbWithMToon } from './loadGlb';
 import { materialsWhere, tintMaterial } from './materials';
-import { isHairMaterial } from './vroidNames';
 import { attachSkinned, type Attachment } from './skinnedAttach';
+
+/** Hair materials by name: VRoid's `*_HAIR` (often wrapped, `N00_000_Hair_00_HAIR_01 (Instance)`), or `hair*`. */
+const isHairMaterial = (name: string) => /_HAIR(?![A-Za-z])|^hair(?![A-Za-z])/i.test(name);
 
 function hairMaterials(root: Parameters<typeof materialsWhere>[0]): MToonMaterial[] {
   return materialsWhere(root, isHairMaterial);

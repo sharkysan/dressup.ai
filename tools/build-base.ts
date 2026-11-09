@@ -5,8 +5,9 @@
  * eye texture per eye-colour preset).
  *   tsx tools/build-base.ts --out public/assets/base
  * Steps: write the naming contract → tools/blender/build_base.py (MPFB human, rig, proxies, T-pose,
- * expressions, body-shape targets, region and base-layer maps, eye textures, VRM 1.0 export, base.json)
- * → neutral skin, brow and lash textures → texture sizes → sparse morph targets → WebP textures → prune
+ * expressions, body-shape targets, region, base-layer and UV-coverage maps, eye textures, VRM 1.0
+ * export, base.json) → neutral skin (measured on the covered texels), brow and lash textures → texture
+ * sizes → sparse morph targets → WebP textures → prune
  * → validate against the contract, and base.json against its schema → size budget → atomic writes.
  * Needs the Blender toolchain (npm run blender:setup).
  */
@@ -51,14 +52,18 @@ const maxTextureSize = (_image: string, material: string) =>
 const EYE_TEXTURE_SIZE = 512;
 const WEBP_QUALITY = 90;
 
-/** Replaces each NEUTRALISE material's base-colour image (still PNG) with its neutral version. */
-function neutraliseTextures(doc: GlbDoc): void {
+/**
+ * Replaces each NEUTRALISE material's base-colour image (still PNG) with its neutral version. The skin
+ * tone is measured on the texels the Body's faces cover (`coverage`), not on the UV gutter around them.
+ */
+function neutraliseTextures(doc: GlbDoc, coverage: Uint8Array): void {
   for (const [name, mode] of Object.entries(NEUTRALISE)) {
     const material = doc.json.materials.find((m: { name?: string }) => m.name === name);
     const texture = material?.pbrMetallicRoughness?.baseColorTexture?.index;
     if (texture === undefined) throw new Error(`material ${name} has no base-colour texture`);
     const image = doc.json.images[doc.json.textures[texture].source].name;
-    replaceImage(doc, image, neutralizeImage(getImage(doc, image), mode));
+    const opts = name === MATERIALS.skin ? { coverage } : {};
+    replaceImage(doc, image, neutralizeImage(getImage(doc, image), mode, opts));
   }
 }
 
@@ -104,7 +109,7 @@ export async function buildBase(opts: {
 
     let doc = readGlb(new Uint8Array(fs.readFileSync(path.join(work, 'base.vrm'))));
     // On the exported PNGs, before the WebP conversion.
-    neutraliseTextures(doc);
+    neutraliseTextures(doc, new Uint8Array(fs.readFileSync(path.join(work, 'coverage.png'))));
     resizeImages(doc, maxTextureSize);
     // The exporter writes every morph target dense, though most move only part of a mesh. Within 1e-6
     // counts as still: the proxies' Surface Deform capture leaves up to ~7e-7 m on vertices that don't move.
@@ -127,13 +132,14 @@ export async function buildBase(opts: {
       throw new Error(`base.vrm is ${human(bytes.byteLength)}, over its ${human(budget)} budget`);
     }
     // Published path (relative to out) -> bytes. regions.png stays PNG: its codes must survive exactly.
+    // The base layer is lossless WebP: its flat colours stay exact, and it is smaller than at quality 90.
     const files = new Map<string, Uint8Array>([
       ['base.vrm', bytes],
       ['base.json', meta],
       [
         'baselayer.webp',
         new Uint8Array(
-          await sharp(path.join(work, 'baselayer.png')).webp({ quality: WEBP_QUALITY }).toBuffer(),
+          await sharp(path.join(work, 'baselayer.png')).webp({ lossless: true }).toBuffer(),
         ),
       ],
       ['regions.png', fs.readFileSync(path.join(work, 'regions.png'))],

@@ -26,8 +26,7 @@ test.beforeEach(async ({ page }) => {
   await page.waitForFunction(() => window.__kiss?.store.getState().avatarMetrics !== null);
 });
 
-// Parked until Task 9: skin tint only reaches MToon materials, and the realistic base is standard PBR.
-test.fixme('skin tone changes the render', async ({ page }) => {
+test('skin tone changes the render', async ({ page }) => {
   await setParams(page, { skin: '#f1d7c8' });
   const light = await shot(page);
   await setParams(page, { skin: '#5a3a24' });

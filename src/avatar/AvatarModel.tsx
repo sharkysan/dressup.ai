@@ -2,20 +2,30 @@ import { VRMUtils, type VRM } from '@pixiv/three-vrm';
 import { useFrame } from '@react-three/fiber';
 import { useEffect, useState } from 'react';
 import { Vector3 } from 'three';
+import type { AvatarParams } from '../catalog/params';
 import { useAppStore } from '../store/useAppStore';
-import { applyParams } from './applyParams';
-import { BASE_META_URL, baseMetaSchema, type BaseMeta } from './baseContract';
-import { applyBody } from './body';
+import { applyParams, type ApplyContext } from './applyParams';
+import {
+  BASE_LAYER_URL,
+  BASE_META_URL,
+  MATERIALS,
+  baseMetaSchema,
+  type BaseMeta,
+} from './baseContract';
+import { EyeTextures, standardMaterial } from './baseMaterials';
+import { SkinTexture, loadImageData } from './bodyTexture';
 import { HairModel } from './HairModel';
 import { loadVrm } from './loadVrm';
 
+type Avatar = { vrm: VRM; ctx: ApplyContext };
+
 /**
- * Loads a VRM, reports status to the store, applies AvatarParams whenever they change, mounts the
- * hairstyle, and ticks the VRM every frame. Mount with `key={url}` so a URL change remounts.
+ * Loads a VRM with its base metadata and base layer, reports status to the store, applies AvatarParams
+ * whenever they change, mounts the hairstyle, and ticks the VRM every frame. Mount with `key={url}` so
+ * a URL change remounts.
  */
 export function AvatarModel({ url }: { url: string }) {
-  const [vrm, setVrm] = useState<VRM | null>(null);
-  const [meta, setMeta] = useState<BaseMeta | null>(null);
+  const [avatar, setAvatar] = useState<Avatar | null>(null);
   const setAvatarStatus = useAppStore((s) => s.setAvatarStatus);
   const setAvatarMetrics = useAppStore((s) => s.setAvatarMetrics);
   const hair = useAppStore((s) => s.params.hair);
@@ -23,65 +33,81 @@ export function AvatarModel({ url }: { url: string }) {
 
   useEffect(() => {
     let cancelled = false;
-    let loaded: VRM | null = null;
+    let loaded: Avatar | null = null;
     setAvatarStatus('loading');
 
-    Promise.all([loadVrm(url), loadMeta()])
-      .then(([result, baseMeta]) => {
+    const vrmLoad = loadVrm(url);
+    Promise.all([vrmLoad, loadMeta(), loadImageData(BASE_LAYER_URL)])
+      .then(([vrm, meta, baseLayer]) => {
         if (cancelled) {
-          VRMUtils.deepDispose(result.scene);
+          disposeVrm(vrm);
           return;
         }
-        loaded = result;
         const { params } = useAppStore.getState();
-        applyParams(result, params);
-        applyBody(result, params.body, baseMeta);
-        setAvatarMetrics(measure(result, params.body.heightCm));
-        setMeta(baseMeta);
-        setVrm(result);
+        loaded = prepare(vrm, meta, baseLayer, params);
+        setAvatarMetrics(measure(vrm, params.body.heightCm));
+        setAvatar(loaded);
         setAvatarStatus('ready');
       })
       .catch((error: unknown) => {
+        // The VRM may have loaded while the metadata or base layer failed: nothing else will free it.
+        if (!loaded) vrmLoad.then(disposeVrm, () => undefined);
         if (cancelled) return;
         setAvatarStatus('error', error instanceof Error ? error.message : String(error));
       });
 
     return () => {
       cancelled = true;
-      if (loaded) VRMUtils.deepDispose(loaded.scene);
+      if (!loaded) return;
+      loaded.ctx.skin.dispose();
+      loaded.ctx.eyes.dispose();
+      disposeVrm(loaded.vrm);
     };
   }, [url, setAvatarStatus, setAvatarMetrics]);
 
-  // Re-apply params on every store change once the model exists (cheap: absolute sets only).
+  // Re-apply params on every store change (cheap: absolute sets; the skin recomposites only on a new
+  // tint). Metrics follow a body change because Box3 ignores morph targets.
   useEffect(() => {
-    if (!vrm) return;
+    if (!avatar) return;
     return useAppStore.subscribe((state, previous) => {
-      if (state.params !== previous.params) applyParams(vrm, state.params);
+      if (state.params === previous.params) return;
+      applyParams(avatar.vrm, state.params, avatar.ctx);
+      if (state.params.body !== previous.params.body) {
+        setAvatarMetrics(measure(avatar.vrm, state.params.body.heightCm));
+      }
     });
-  }, [vrm]);
-
-  // Body shape, height and grounding; metrics follow because Box3 ignores morph targets.
-  useEffect(() => {
-    if (!vrm || !meta) return;
-    return useAppStore.subscribe((state, previous) => {
-      if (state.params.body === previous.params.body) return;
-      applyBody(vrm, state.params.body, meta);
-      setAvatarMetrics(measure(vrm, state.params.body.heightCm));
-    });
-  }, [vrm, meta, setAvatarMetrics]);
+  }, [avatar, setAvatarMetrics]);
 
   useFrame((_, delta) => {
-    vrm?.update(delta);
+    avatar?.vrm.update(delta);
   });
 
-  if (!vrm) return null;
+  if (!avatar) return null;
   return (
     <>
-      <primitive object={vrm.scene} />
-      <HairModel vrm={vrm} hairId={hair} hairColor={hairColor} />
+      <primitive object={avatar.vrm.scene} />
+      <HairModel vrm={avatar.vrm} hairId={hair} hairColor={hairColor} />
     </>
   );
 }
+
+/**
+ * Builds the skin canvas from the Skin material's loaded map and applies `params`; the map the canvas
+ * replaces is freed.
+ */
+function prepare(vrm: VRM, meta: BaseMeta, baseLayer: ImageData, params: AvatarParams): Avatar {
+  const original = standardMaterial(vrm.scene, MATERIALS.skin)?.map;
+  // GLTFLoader decodes to an ImageBitmap, or an HTMLImageElement where bitmaps are unsupported.
+  const image = original?.image as ImageBitmap | HTMLImageElement | undefined;
+  if (!original || !image) throw new Error(`the base has no ${MATERIALS.skin} material with a map`);
+  const ctx = { skin: new SkinTexture(image, baseLayer), eyes: new EyeTextures(), meta };
+  applyParams(vrm, params, ctx);
+  original.dispose();
+  if ('close' in image) image.close();
+  return { vrm, ctx };
+}
+
+const disposeVrm = (vrm: VRM) => VRMUtils.deepDispose(vrm.scene);
 
 async function loadMeta(): Promise<BaseMeta> {
   const response = await fetch(BASE_META_URL);

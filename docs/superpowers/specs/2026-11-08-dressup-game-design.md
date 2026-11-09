@@ -165,17 +165,17 @@ Performance: models (~15 MB with `PoseLandmarker`) download when the user reache
 - One base, a MakeHuman character built with MPFB2 and exported as VRM 1.0 by `tools/build-base.py` (Blender headless):
   - Body mesh keeps MakeHuman's topology (≈13k vertices) so landmark correspondences and garment fitting are stable. Shape keys for each `BodyMorph` are created from the matching MakeHuman modifiers (both directions for -1..1 morphs) and exported as morph targets. Body morphs never move the head: each shape key's offsets are zeroed above the neck, blended to full strength over the neck so there is no seam. The head's shape comes only from the likeness, so the correspondence data (§12) built on the base head stays valid at every body shape.
   - Expressions: MPFB2 face poses for the five expressions are baked to shape keys and registered as VRM expression presets.
-  - Eyes, teeth and tongue are separate meshes from the MakeHuman system assets; eyeballs carry a greyscale iris tinted at runtime.
-  - Body texture: realistic skin albedo (and normal map) from the MakeHuman system assets, neutralised to a mid skin tone, with the base layer (undershirt and shorts) baked in, plus a region-ID texture (R channel codes: torso, pelvis, upperArms, forearms, thighs, calves, feet, neck).
+  - Eyes, teeth and tongue are separate meshes from the MakeHuman system assets. The eyeballs switch between six shipped eye textures, one per `eyeColor` preset, instead of tinting a greyscale iris.
+  - Body texture: realistic skin albedo (and normal map) from the MakeHuman system assets, neutralised to a mid skin tone, plus a region-ID texture (R channel codes: torso, pelvis, upperArms, forearms, thighs, calves, feet, neck). The base layer (undershirt and shorts) ships as an overlay texture in the body's UV layout, composited over the tinted skin at runtime, so the tint never colours it.
   - No hair on the base; hairstyles are separate assets.
   - Rig: MPFB2's game-engine skeleton, mapped to VRM humanoid bones in the export.
 - Applying params and likeness:
   - `body.*` morphs → morph target influences on the body mesh and on every attached garment and hairstyle (same morph names, §8). `heightCm` → uniform scale of the avatar root relative to the base's height at the current morphs.
-  - `skin` → multiplier on the body albedo so the body matches `Likeness.sourceSkin` (or `skin` when there is no likeness).
+  - `skin` → multiplier on the neutral skin albedo, under the base layer, so the body matches `Likeness.sourceSkin` (or `skin` when there is no likeness).
   - `Likeness.headOffsets` → added to the body mesh as one extra runtime morph target at influence 1, so expression morphs still compose on top. Head-attached assets (hairstyles, `head` items, glasses) follow the same fit: each carries a head binding (§8), and on attach, or when the likeness changes, a runtime "likeness" morph target is built for the asset from `headOffsets` through that binding.
   - `Likeness.faceTexture` → composited over the head region of the body albedo on a 2048² canvas using its alpha; recomposited only when likeness, `skin` or the outfit changes.
   - `face: 'default'` (no likeness on this device, e.g. a shared link) → the base head with no offsets and no projected texture.
-  - `hairColor` → tint on greyscale hair textures; `eyeColor` → iris tint; `hair`, `extras`, `outfit` → attach assets (§8).
+  - `hairColor` → tint on greyscale hair textures; `eyeColor` → that preset's eye texture; `hair`, `extras`, `outfit` → attach assets (§8).
 - Body region visibility: the body material uses `alphaMode: MASK`; the composited body texture sets alpha 0 where the region-ID matches any region in the union of equipped garments' `covers`. Recomposited only when the outfit changes.
 - Raw vs normalised bones: skinned assets bind to the raw bones; poses are applied to three-vrm normalised humanoid bones and propagated by `vrm.update()`.
 - No spring-bone physics in v1: hair and skirts are rigidly skinned. Still images do not need settling, and skipping physics keeps hair and garments modular. Physics is a v2 candidate.
