@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "format": "prettier --write .",
     "e2e": "playwright test",
+    "lineup": "tsx tools/lineup.ts",
     "ci": "npm run lint && npm run typecheck && npm test && npm run build && npm run e2e",
     "assets:fetch-dev": "./tools/fetch-dev-samples.sh",
     "assets:synth": "tsx tools/synth-variants.ts --src assets/source/base-a/neutral.vrm --out assets/source/base-a/morphs",
@@ -21,7 +22,8 @@
     "assets:dev": "npm run assets:fetch-dev && npm run assets:synth && npm run assets:models && npm run assets",
     "assets:hair": "tsx tools/build-hair.ts --src assets/source/hair --out public/assets/hair --webp",
     "assets:catalog": "tsx tools/build-catalog.ts --source assets/source --public public/assets --out public/assets/catalog.json",
-    "assets:models": "./tools/fetch-models.sh && tsx tools/copy-mediapipe-wasm.ts"
+    "assets:models": "./tools/fetch-models.sh && tsx tools/copy-mediapipe-wasm.ts",
+    "calibrate:canonical": "tsx tools/calibrate-canonical.ts"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.2.2",

@@ -1,4 +1,6 @@
 import { useEffect } from 'react';
+import { analyzePhoto } from './analysis/analyze';
+import { loadModels } from './analysis/mediapipe';
 import { supportsWebGL2 } from './scene/supportsWebGL2';
 import { Viewer } from './scene/Viewer';
 import { useAppStore } from './store/useAppStore';
@@ -10,14 +12,18 @@ import { strings } from './ui/strings';
 
 declare global {
   interface Window {
-    __kiss?: { store: typeof useAppStore };
+    __kiss?: {
+      store: typeof useAppStore;
+      /** Dev/e2e hook into the analysis pipeline (only present with the dev flag). */
+      analysis: { analyzePhoto: typeof analyzePhoto; loadModels: typeof loadModels };
+    };
   }
 }
 
 export default function App() {
   const dev = isDevPanelEnabled();
   useEffect(() => {
-    if (dev) window.__kiss = { store: useAppStore };
+    if (dev) window.__kiss = { store: useAppStore, analysis: { analyzePhoto, loadModels } };
   }, [dev]);
 
   if (!supportsWebGL2()) {

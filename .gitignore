@@ -42,3 +42,7 @@ public/assets/catalog.json
 # self-hosted MediaPipe runtime and models (npm run assets:models)
 public/models/
 public/mediapipe/
+
+# lineup test material (consented photos and their sheets never leave the machine)
+lineup-out/
+e2e/fixtures/photos/
