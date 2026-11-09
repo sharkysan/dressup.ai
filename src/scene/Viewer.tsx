@@ -42,7 +42,13 @@ export function Viewer() {
         <color attach="background" args={[BACKDROP_COLOR]} />
         <hemisphereLight intensity={1.2} groundColor="#8a8070" />
         <directionalLight position={[2, 4, 3]} intensity={1.5} />
-        <OrbitControls makeDefault enablePan={false} minDistance={0.4} maxDistance={5} />
+        <OrbitControls
+          makeDefault
+          enablePan={false}
+          enableDamping={false}
+          minDistance={0.4}
+          maxDistance={5}
+        />
         <Framing />
         <AvatarModel key={BASE_A_URL} url={BASE_A_URL} />
         <HandlePublisher />

@@ -8,8 +8,12 @@ async function setParams(page: Page, patch: Partial<AvatarParams>) {
   await page.evaluate((p) => window.__kiss!.store.getState().setParams(p), patch);
 }
 
+/** Waits for two rendered frames (plus a settle for async loads) so screenshots never catch a half-applied state. */
 async function shot(page: Page, settle = 400) {
   await page.waitForTimeout(settle);
+  await page.evaluate(
+    () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+  );
   return page.getByTestId('viewer').locator('canvas').screenshot();
 }
 
@@ -20,6 +24,8 @@ test.beforeEach(async ({ page }) => {
     timeout: 45_000,
   });
   await expect(page.getByTestId('params-panel')).toBeVisible();
+  // Camera framing depends on avatar metrics measured after load; wait for them so the first shot is final.
+  await page.waitForFunction(() => window.__kiss?.store.getState().avatarMetrics !== null);
 });
 
 test('face morphs change the render', async ({ page }) => {
