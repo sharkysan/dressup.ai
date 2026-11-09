@@ -2,3 +2,8 @@
 export function isDevPanelEnabled(loc: Location = location): boolean {
   return import.meta.env.DEV || loc.hash === '#dev';
 }
+
+/** The analysis debug page lives at #analysis (developer tool, spec §13). */
+export function isAnalysisRoute(loc: Location = location): boolean {
+  return loc.hash === '#analysis';
+}

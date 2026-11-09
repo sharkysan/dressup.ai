@@ -2,7 +2,8 @@ import { useEffect } from 'react';
 import { supportsWebGL2 } from './scene/supportsWebGL2';
 import { Viewer } from './scene/Viewer';
 import { useAppStore } from './store/useAppStore';
-import { isDevPanelEnabled } from './ui/dev/devFlag';
+import { AnalysisPage } from './ui/dev/AnalysisPage';
+import { isAnalysisRoute, isDevPanelEnabled } from './ui/dev/devFlag';
 import { ParamsPanel } from './ui/dev/ParamsPanel';
 import { ExportButton } from './ui/ExportButton';
 import { strings } from './ui/strings';
@@ -23,6 +24,13 @@ export default function App() {
     return (
       <main style={{ display: 'grid', placeItems: 'center', height: '100%', padding: 24 }}>
         <p>{strings.webglUnsupported}</p>
+      </main>
+    );
+  }
+  if (isAnalysisRoute()) {
+    return (
+      <main style={{ height: '100%' }}>
+        <AnalysisPage />
       </main>
     );
   }
