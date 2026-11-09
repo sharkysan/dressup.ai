@@ -17,13 +17,11 @@ import {
   getImage,
   neutralizeImage,
   replaceImage,
-  resizeImage,
+  resizeAllImages,
   type NeutralizeMode,
 } from './glb/textures';
 import type { GlbDoc } from './glb/types';
-
-const SKIN_SUFFIX = '_SKIN';
-const IRIS_PREFIX = 'EyeIris';
+import { isIrisMaterial, isSkinMaterial } from '../src/avatar/vroidNames';
 
 export function neutralizeBaseTextures(doc: GlbDoc): string[] {
   const done = new Set<string>();
@@ -40,18 +38,14 @@ export function neutralizeBaseTextures(doc: GlbDoc): string[] {
       touched.push(`${image.name} (${mode})`);
     }
   };
-  process((n) => n.endsWith(SKIN_SUFFIX), 'divideByMedian');
-  process((n) => n.startsWith(IRIS_PREFIX), 'luminance');
-  return touched;
-}
-
-export function resizeAllImages(doc: GlbDoc, maxSize: number): void {
-  for (const image of doc.json.images) {
-    if (!image.name || image.bufferView === undefined) continue;
-    const png = getImage(doc, image.name);
-    const resized = resizeImage(png, maxSize);
-    if (resized !== png) replaceImage(doc, image.name, resized);
+  process(isSkinMaterial, 'divideByMedian');
+  process(isIrisMaterial, 'luminance');
+  if (touched.length === 0) {
+    console.warn(
+      'WARNING: no skin or iris materials matched — runtime tinting will do nothing. Check material names.',
+    );
   }
+  return touched;
 }
 
 /** `<dir>/<param>.min.vrm` → variant name `<param>_min`; hair is removed so mesh indices match the base. */

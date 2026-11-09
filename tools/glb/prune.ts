@@ -32,6 +32,12 @@ export function pruneUnused(input: GlbDoc): GlbDoc {
       usedMaterials.has(i),
     );
   }
+  // VRM 1.0 expressions bind materials by index (colour and texture-transform binds).
+  forEachVrm1MaterialBind(json, (binds) => {
+    const kept = binds.filter((b) => usedMaterials.has(b.material));
+    for (const b of kept) b.material = materialMap.get(b.material)!;
+    return kept;
+  });
   json.materials = json.materials.filter((_: unknown, i: number) => usedMaterials.has(i));
   for (const mesh of json.meshes)
     for (const p of mesh.primitives)
@@ -52,6 +58,8 @@ export function pruneUnused(input: GlbDoc): GlbDoc {
   for (const t of json.textures) {
     if (t.source !== undefined) usedImages.add(t.source);
     if (t.sampler !== undefined) usedSamplers.add(t.sampler);
+    const webp = t.extensions?.EXT_texture_webp?.source;
+    if (webp !== undefined) usedImages.add(webp);
   }
   const meta = json.extensions?.VRMC_vrm?.meta;
   if (meta?.thumbnailImage !== undefined) usedImages.add(meta.thumbnailImage);
@@ -62,6 +70,8 @@ export function pruneUnused(input: GlbDoc): GlbDoc {
   for (const t of json.textures) {
     if (t.source !== undefined) t.source = imageMap.get(t.source)!;
     if (t.sampler !== undefined) t.sampler = samplerMap.get(t.sampler)!;
+    const webp = t.extensions?.EXT_texture_webp;
+    if (webp?.source !== undefined) webp.source = imageMap.get(webp.source)!;
   }
   if (meta?.thumbnailImage !== undefined) meta.thumbnailImage = imageMap.get(meta.thumbnailImage)!;
 
@@ -173,6 +183,22 @@ function forEachAccessorRef(
     for (const s of anim.samplers) {
       fn(s.input, (v) => (s.input = v));
       fn(s.output, (v) => (s.output = v));
+    }
+  }
+}
+
+/** VRM 1.0 expression binds that reference materials: preset and custom, colour and texture transform. */
+function forEachVrm1MaterialBind(
+  json: any,
+  fn: (binds: { material: number }[]) => { material: number }[],
+): void {
+  const expressions = json.extensions?.VRMC_vrm?.expressions;
+  if (!expressions) return;
+  for (const group of ['preset', 'custom']) {
+    for (const expression of Object.values(expressions[group] ?? {}) as any[]) {
+      for (const key of ['materialColorBinds', 'textureTransformBinds']) {
+        if (Array.isArray(expression?.[key])) expression[key] = fn(expression[key]);
+      }
     }
   }
 }

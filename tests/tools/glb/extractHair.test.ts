@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { readAccessor } from '../../../tools/glb/accessors';
 import { extractHair } from '../../../tools/glb/extractHair';
-import { makeGlb } from '../../../tools/test-fixtures/makeGlb';
+import { appendBytes, decodePng, makeGlb, solidPng } from '../../../tools/test-fixtures/makeGlb';
 
 test('extractHair produces a single-joint skin bound to the head and only hair primitives', () => {
   const out = extractHair(makeGlb({ withHair: true }));
@@ -68,4 +68,22 @@ test('detects lowercase non-VRoid hair naming (mesh "hair_tail", material "hair"
   doc.json.materials.find((m: { name: string }) => m.name === 'Hair_00_HAIR').name = 'hair';
   const out = extractHair(doc);
   expect(out.json.meshes[0].primitives.length).toBe(2);
+});
+
+test('resizes every hair texture, not only the base colour', () => {
+  const doc = makeGlb({ withHair: true });
+  // Give the hair material a large normal map.
+  const big = solidPng(2048, 2048, [128, 128, 255, 255]);
+  const bv = appendBytes(doc, big);
+  doc.json.images.push({ name: 'Hair_00_nml', mimeType: 'image/png', bufferView: bv });
+  doc.json.textures.push({ source: doc.json.images.length - 1, sampler: 0 });
+  const hairMat = doc.json.materials.find((m: { name: string }) => m.name === 'Hair_00_HAIR');
+  hairMat.normalTexture = { index: doc.json.textures.length - 1 };
+  const out = extractHair(doc, { maxTexture: 512 });
+  for (const img of out.json.images) {
+    const b = out.json.bufferViews[img.bufferView]!;
+    const png = out.bin.subarray(b.byteOffset ?? 0, (b.byteOffset ?? 0) + b.byteLength);
+    const { width, height } = decodePng(png);
+    expect(Math.max(width, height)).toBeLessThanOrEqual(512);
+  }
 });

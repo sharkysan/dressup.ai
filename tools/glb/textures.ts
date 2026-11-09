@@ -106,3 +106,31 @@ export function resizeImage(png: Uint8Array, maxSize: number): Uint8Array {
 function clamp255(v: number): number {
   return Math.max(0, Math.min(255, Math.round(v)));
 }
+
+/** Resizes every embedded image so neither side exceeds `maxSize` (spec §12: textures ≤1024²). */
+export function resizeAllImages(doc: GlbDoc, maxSize: number): void {
+  doc.json.images.forEach((image: { name?: string; bufferView?: number }, index: number) => {
+    if (image.bufferView === undefined) return;
+    const bv = doc.json.bufferViews[image.bufferView]!;
+    const start = bv.byteOffset ?? 0;
+    const png = doc.bin.subarray(start, start + bv.byteLength);
+    const resized = resizeImage(png, maxSize);
+    if (resized !== png) replaceImageAt(doc, index, resized);
+  });
+}
+
+/** Replaces the bytes of the image at `index` (by position, so unnamed/duplicate names are safe). */
+export function replaceImageAt(doc: GlbDoc, index: number, png: Uint8Array): void {
+  const image = doc.json.images[index];
+  if (!image) throw new Error(`image ${index} not found`);
+  const offset = doc.bin.byteLength;
+  const padded = (png.byteLength + 3) & ~3;
+  const next = new Uint8Array(offset + padded);
+  next.set(doc.bin, 0);
+  next.set(png, offset);
+  doc.bin = next;
+  doc.json.buffers[0]!.byteLength = next.byteLength;
+  doc.json.bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: png.byteLength });
+  image.bufferView = doc.json.bufferViews.length - 1;
+  image.mimeType = 'image/png';
+}

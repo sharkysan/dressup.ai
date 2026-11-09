@@ -83,6 +83,11 @@ export function addMorphTargets(
         });
         mesh.extras ??= {};
         mesh.extras.targetNames ??= [];
+        // Keep names aligned with targets: three.js discards targetNames when lengths differ.
+        const existing = (mesh.primitives[0]?.targets?.length ?? 1) - 1;
+        while (mesh.extras.targetNames.length < existing) {
+          mesh.extras.targetNames.push(`target_${mesh.extras.targetNames.length}`);
+        }
         mesh.extras.targetNames.push(variant.name);
       }
     },

@@ -2,17 +2,13 @@ import { MToonMaterial } from '@pixiv/three-vrm';
 import { Mesh, type Material, type Object3D } from 'three';
 import { hexToOklab, oklabToHex, shadeFor } from '../color/oklab';
 
-/** Unique MToon materials on meshes under `root` whose name ends with `suffix` (VRoid naming). */
-export function materialsBySuffix(root: Object3D, suffix: string): MToonMaterial[] {
+/** Unique MToon materials whose name satisfies `predicate`. */
+export function materialsWhere(
+  root: Object3D,
+  predicate: (name: string) => boolean,
+): MToonMaterial[] {
   return uniqueMaterials(root).filter(
-    (m): m is MToonMaterial => m instanceof MToonMaterial && m.name.endsWith(suffix),
-  );
-}
-
-/** Unique MToon materials whose name starts with `prefix`. */
-export function materialsByPrefix(root: Object3D, prefix: string): MToonMaterial[] {
-  return uniqueMaterials(root).filter(
-    (m): m is MToonMaterial => m instanceof MToonMaterial && m.name.startsWith(prefix),
+    (m): m is MToonMaterial => m instanceof MToonMaterial && predicate(m.name),
   );
 }
 

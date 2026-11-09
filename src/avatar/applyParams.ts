@@ -2,7 +2,8 @@ import type { VRM } from '@pixiv/three-vrm';
 import { Mesh, type Object3D } from 'three';
 import type { AvatarParams } from '../catalog/params';
 import { EYE_COLORS } from './eyeColors';
-import { materialsByPrefix, materialsBySuffix, mixHex, tintMaterial } from './materials';
+import { materialsWhere, mixHex, tintMaterial } from './materials';
+import { isBrowMaterial, isIrisMaterial, isMouthMaterial, isSkinMaterial } from './vroidNames';
 
 export const FACE_SHAPE_KEYS = [
   'faceWidth',
@@ -65,10 +66,11 @@ export function setExpression(vrm: VRM, expression: AvatarParams['expression']):
  */
 export function applyParams(vrm: VRM, params: AvatarParams): void {
   const root = vrm.scene;
-  for (const m of materialsBySuffix(root, '_SKIN')) tintMaterial(m, params.skin);
-  for (const m of materialsByPrefix(root, 'EyeIris')) tintMaterial(m, EYE_COLORS[params.eyeColor]);
-  for (const m of materialsByPrefix(root, 'FaceBrow')) tintMaterial(m, params.hairColor);
-  for (const m of materialsByPrefix(root, 'FaceMouth')) {
+  for (const m of materialsWhere(root, isSkinMaterial)) tintMaterial(m, params.skin);
+  for (const m of materialsWhere(root, isIrisMaterial))
+    tintMaterial(m, EYE_COLORS[params.eyeColor]);
+  for (const m of materialsWhere(root, isBrowMaterial)) tintMaterial(m, params.hairColor);
+  for (const m of materialsWhere(root, isMouthMaterial)) {
     tintMaterial(m, mixHex('#ffffff', params.lipTint, LIP_TINT_STRENGTH));
   }
   setFaceShape(root, params.faceShape);

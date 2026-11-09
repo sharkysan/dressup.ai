@@ -21,7 +21,25 @@ export function readGlb(buf: Uint8Array): GlbDoc {
     offset += 8 + chunkLength;
   }
   if (!json) throw new Error('not a GLB: missing JSON chunk');
+  assertSupported(json);
   return { json, bin };
+}
+
+const UNSUPPORTED_REQUIRED = [
+  'KHR_draco_mesh_compression',
+  'EXT_meshopt_compression',
+  'KHR_mesh_quantization',
+];
+
+/** The toolkit reads raw accessors; compressed or quantised geometry would be read as garbage. */
+function assertSupported(json: GltfJson): void {
+  const required = (json.extensionsRequired ?? []) as string[];
+  const bad = required.filter((e) => UNSUPPORTED_REQUIRED.includes(e));
+  if (bad.length) {
+    throw new Error(
+      `unsupported glTF extensions required: ${bad.join(', ')} — decompress the model first`,
+    );
+  }
 }
 
 /** Serialises a GlbDoc. JSON is padded with spaces, BIN with zeros, both to 4 bytes. */

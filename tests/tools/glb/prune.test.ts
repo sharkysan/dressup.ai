@@ -68,3 +68,41 @@ test('VRM 0.x: keeps materialProperties aligned and remaps texture references', 
   const thumb = out.json.extensions.VRM.meta.texture;
   expect(out.json.images[out.json.textures[thumb].source].name).toBe('Thumbnail');
 });
+
+test('VRM 1.0: remaps expression material binds and drops binds to removed materials', () => {
+  const doc = makeGlb({ withHair: true });
+  const hairMat = doc.json.materials.findIndex((m: { name: string }) => m.name === 'Hair_00_HAIR');
+  const faceMat = doc.json.materials.findIndex((m: { name: string }) => m.name === 'Face_00_SKIN');
+  doc.json.extensions.VRMC_vrm.expressions.preset.happy = {
+    materialColorBinds: [
+      { material: hairMat, type: 'color', targetValue: [1, 0, 0, 1] },
+      { material: faceMat, type: 'color', targetValue: [0, 1, 0, 1] },
+    ],
+    textureTransformBinds: [{ material: faceMat, scale: [1, 1], offset: [0, 0] }],
+  };
+  // Remove hair so material indices shift.
+  const body = doc.json.meshes.find((m: { name: string }) => m.name === 'Body');
+  body.primitives = body.primitives.filter(
+    (p: { material: number }) => !doc.json.materials[p.material].name.endsWith('_HAIR'),
+  );
+  delete doc.json.nodes.find((n: { name: string }) => n.name === 'Hair').mesh;
+  doc.json.meshes = doc.json.meshes.filter((m: { name: string }) => m.name !== 'Hair');
+
+  const out = pruneUnused(doc);
+  const happy = out.json.extensions.VRMC_vrm.expressions.preset.happy;
+  const newFace = out.json.materials.findIndex((m: { name: string }) => m.name === 'Face_00_SKIN');
+  expect(happy.materialColorBinds).toHaveLength(1);
+  expect(happy.materialColorBinds[0].material).toBe(newFace);
+  expect(happy.textureTransformBinds[0].material).toBe(newFace);
+});
+
+test('remaps EXT_texture_webp.source alongside textures[].source', () => {
+  const doc = makeGlb({ withHair: true });
+  for (const t of doc.json.textures) t.extensions = { EXT_texture_webp: { source: t.source } };
+  const body = doc.json.meshes.find((m: { name: string }) => m.name === 'Body');
+  body.primitives = body.primitives.filter(
+    (p: { material: number }) => !doc.json.materials[p.material].name.endsWith('_HAIR'),
+  );
+  const out = pruneUnused(doc);
+  for (const t of out.json.textures) expect(t.extensions.EXT_texture_webp.source).toBe(t.source);
+});

@@ -62,3 +62,14 @@ test('an identical variant adds no target anywhere', () => {
   for (const m of out.json.meshes)
     for (const p of m.primitives) expect(p.targets ?? []).toHaveLength(0);
 });
+
+test('pads missing targetNames so names stay aligned with targets', () => {
+  const base = makeGlb({ morphTargets: 2 });
+  delete faceMesh(base).extras; // VRoid always writes names, but other tools may not
+  const variant = makeGlb({ morphTargets: 2 });
+  nudgeFace(variant, 0.02);
+  const out = addMorphTargets(base, [{ name: 'noseWidth_max', doc: variant }]);
+  const face = faceMesh(out);
+  expect(face.extras.targetNames).toHaveLength(face.primitives[0].targets.length);
+  expect(face.extras.targetNames.at(-1)).toBe('noseWidth_max');
+});

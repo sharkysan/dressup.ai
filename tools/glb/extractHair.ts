@@ -3,7 +3,7 @@ import { appendAccessor, readAccessor } from './accessors';
 import { isHairMaterialName, isHairMeshName } from './hairNames';
 import { findHumanBoneNode, HUMAN_BONE_EXTRA } from './humanoid';
 import { pruneUnused } from './prune';
-import { getImage, neutralizeImage, replaceImage, resizeImage } from './textures';
+import { getImage, neutralizeImage, replaceImage, resizeAllImages } from './textures';
 import { normalizeJson, type GlbDoc } from './types';
 
 const HAIR_MESH = 'Hair';
@@ -136,10 +136,11 @@ export function extractHair(
     if (textureIndex === undefined) continue;
     const image = doc.json.images[doc.json.textures[textureIndex].source];
     if (!image?.name || done.has(image.name)) continue;
-    const grey = neutralizeImage(getImage(doc, image.name), 'luminance');
-    replaceImage(doc, image.name, resizeImage(grey, maxTexture));
+    replaceImage(doc, image.name, neutralizeImage(getImage(doc, image.name), 'luminance'));
     done.add(image.name);
   }
+
+  resizeAllImages(doc, maxTexture);
 
   // 5. Drop VRM-only material extensions that reference nothing here, then compact.
   for (const material of doc.json.materials) {

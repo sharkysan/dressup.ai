@@ -25,3 +25,9 @@ test('reads the real sample VRM when present', () => {
   const doc = readGlb(new Uint8Array(fs.readFileSync(p)));
   expect(doc.json.extensionsUsed).toContain('VRMC_vrm');
 });
+
+test('rejects compressed inputs the toolkit cannot read', () => {
+  const doc = makeGlb();
+  doc.json.extensionsRequired = ['KHR_draco_mesh_compression'];
+  expect(() => readGlb(writeGlb(doc))).toThrow(/KHR_draco_mesh_compression/);
+});

@@ -1,6 +1,6 @@
 import { MToonMaterial } from '@pixiv/three-vrm';
 import { BufferGeometry, Group, Mesh } from 'three';
-import { materialsBySuffix, mixHex, tintMaterial } from '../../src/avatar/materials';
+import { materialsWhere, mixHex, tintMaterial } from '../../src/avatar/materials';
 import { shadeFor } from '../../src/color/oklab';
 
 function named(name: string) {
@@ -9,7 +9,7 @@ function named(name: string) {
   return m;
 }
 
-test('materialsBySuffix finds unique MToon materials by name suffix', () => {
+test('materialsWhere finds unique MToon materials by predicate', () => {
   const root = new Group();
   const skin = named('Body_00_SKIN');
   root.add(
@@ -17,9 +17,9 @@ test('materialsBySuffix finds unique MToon materials by name suffix', () => {
     new Mesh(new BufferGeometry(), skin),
     new Mesh(new BufferGeometry(), named('Hair_00_HAIR')),
   );
-  expect(materialsBySuffix(root, '_SKIN')).toEqual([skin]);
-  expect(materialsBySuffix(root, '_HAIR')).toHaveLength(1);
-  expect(materialsBySuffix(root, '_EYE')).toHaveLength(0);
+  expect(materialsWhere(root, (n) => n.endsWith('_SKIN'))).toEqual([skin]);
+  expect(materialsWhere(root, (n) => n.endsWith('_HAIR'))).toHaveLength(1);
+  expect(materialsWhere(root, (n) => n.endsWith('_EYE'))).toHaveLength(0);
 });
 
 test('tintMaterial sets color and a darker shade', () => {

@@ -3,12 +3,12 @@ import { useEffect, useRef } from 'react';
 import { findHair } from '../catalog/catalog';
 import { useAppStore } from '../store/useAppStore';
 import { loadGlbWithMToon } from './loadGlb';
-import { materialsBySuffix, tintMaterial } from './materials';
+import { materialsWhere, tintMaterial } from './materials';
+import { isHairMaterial } from './vroidNames';
 import { attachSkinned, type Attachment } from './skinnedAttach';
 
-/** VRoid names hair materials '*_HAIR'; other tools often just 'hair'. */
-function hairMaterials(root: Parameters<typeof materialsBySuffix>[0]): MToonMaterial[] {
-  return [...new Set([...materialsBySuffix(root, '_HAIR'), ...materialsBySuffix(root, 'hair')])];
+function hairMaterials(root: Parameters<typeof materialsWhere>[0]): MToonMaterial[] {
+  return materialsWhere(root, isHairMaterial);
 }
 
 const warned = new Set<string>();
@@ -29,6 +29,9 @@ export function HairModel({
   const catalog = useAppStore((s) => s.catalog);
   // Materials are captured before attach: attachSkinned re-parents the meshes out of the loaded root.
   const current = useRef<{ attachment: Attachment; materials: MToonMaterial[] } | null>(null);
+  // Latest colour, readable from the load callback so a change mid-load is not lost.
+  const colorRef = useRef(hairColor);
+  colorRef.current = hairColor;
 
   useEffect(() => {
     let cancelled = false;
@@ -46,7 +49,7 @@ export function HairModel({
           return;
         }
         const materials = hairMaterials(root);
-        for (const m of materials) tintMaterial(m, hairColor);
+        for (const m of materials) tintMaterial(m, colorRef.current);
         const attachment = attachSkinned(vrm, root);
         current.current = { attachment, materials };
       })
