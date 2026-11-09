@@ -1,21 +1,23 @@
 /**
- * build-base: the realistic MakeHuman base (spec §4, §7), built headlessly in Blender, → <out>/base.vrm.
+ * build-base: the realistic MakeHuman base (spec §4, §7), built headlessly in Blender, → <out>/base.vrm
+ * and <out>/base.json (height metadata, baseMetaSchema).
  *   tsx tools/build-base.ts --out public/assets/base
  * Steps: write the naming contract → tools/blender/build_base.py (MPFB human, rig, proxies, T-pose,
- * expressions, VRM 1.0 export) → WebP textures → prune → validate against the contract → size budget →
- * atomic write.
+ * expressions, body-shape targets, VRM 1.0 export, base.json) → sparse morph targets → WebP textures →
+ * prune → validate against the contract, and base.json against its schema → size budget → atomic writes.
  * Needs the Blender toolchain (npm run blender:setup).
  */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { contractJson } from '../src/avatar/baseContract';
+import { baseMetaSchema, contractJson } from '../src/avatar/baseContract';
 import { validateBase } from './base/validateBase';
 import { writeAtomically } from './base/writeAtomically';
 import { cli, human, required } from './cli';
 import { readGlb, writeGlb } from './glb/glb';
 import { pruneUnused } from './glb/prune';
+import { sparsifyMorphTargets } from './glb/sparsify';
 import { convertImagesToWebp } from './glb/webp';
 
 /** Spec §12 leaves 8 MB for the base and default outfit; the base gets 6 MiB of it. */
@@ -41,14 +43,19 @@ export async function buildBase(opts: {
     }
 
     let doc = readGlb(new Uint8Array(fs.readFileSync(path.join(work, 'base.vrm'))));
+    // The exporter writes every morph target dense, though most move only part of a mesh. Within 1e-6
+    // counts as still: the proxies' Surface Deform capture leaves up to ~7e-7 m on vertices that don't move.
+    doc = sparsifyMorphTargets(doc, { epsilon: 1e-6 });
     // MPFB's PNG textures alone are over the budget; WebP brings them well under it.
     if (!(await convertImagesToWebp(doc))) throw new Error('WebP conversion needs `sharp`');
     doc = pruneUnused(doc);
-    // Task 5 adds the body morph targets this check looks for.
-    const problems = validateBase(doc, { bodyTargets: false });
+    const problems = validateBase(doc);
     if (problems.length > 0) {
       throw new Error(`base.vrm breaks the naming contract:\n  ${problems.join('\n  ')}`);
     }
+    const meta = fs.readFileSync(path.join(work, 'base.json'));
+    const parsed = baseMetaSchema.safeParse(JSON.parse(meta.toString('utf8')));
+    if (!parsed.success) throw new Error(`base.json is invalid: ${parsed.error.message}`);
 
     const bytes = writeGlb(doc);
     if (bytes.byteLength > budget) {
@@ -56,6 +63,7 @@ export async function buildBase(opts: {
     }
     fs.mkdirSync(opts.out, { recursive: true });
     writeAtomically(path.join(opts.out, 'base.vrm'), bytes);
+    writeAtomically(path.join(opts.out, 'base.json'), meta);
     return { bytes: bytes.byteLength, problems };
   } finally {
     fs.rmSync(work, { recursive: true, force: true });

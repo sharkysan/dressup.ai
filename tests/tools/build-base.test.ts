@@ -3,7 +3,13 @@
 // Integration test of the built base (npm run assets:base); skipped until the build has run.
 import fs from 'node:fs';
 import { Matrix4, Quaternion, Vector3 } from 'three';
-import { BODY_MESH, EXPRESSION_TARGETS, MATERIALS } from '../../src/avatar/baseContract';
+import {
+  ALL_BODY_TARGETS,
+  BODY_MESH,
+  EXPRESSION_TARGETS,
+  MATERIALS,
+  baseMetaSchema,
+} from '../../src/avatar/baseContract';
 import { validateBase } from '../../tools/base/validateBase';
 import { readAccessor } from '../../tools/glb/accessors';
 import { readGlb } from '../../tools/glb/glb';
@@ -11,6 +17,7 @@ import { findHumanBoneNode } from '../../tools/glb/humanoid';
 import type { GlbDoc } from '../../tools/glb/types';
 
 const BUILT = 'public/assets/base/base.vrm';
+const META = 'public/assets/base/base.json';
 // The meshes that carry the expression morph targets: everything but the eyeballs.
 const EXPRESSION_MESHES = [
   BODY_MESH,
@@ -25,6 +32,18 @@ const mesh = (doc: GlbDoc, name: string) => {
   if (!found) throw new Error(`mesh ${name} is missing`);
   return found;
 };
+
+/** The Body's extent along glTF y, from its POSITION accessors' bounds. */
+function bodyMinMaxY(doc: GlbDoc): [number, number] {
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const p of mesh(doc, BODY_MESH).primitives) {
+    const position = doc.json.accessors[p.attributes.POSITION];
+    minY = Math.min(minY, position.min[1]);
+    maxY = Math.max(maxY, position.max[1]);
+  }
+  return [minY, maxY];
+}
 
 function localMatrix(node: any): Matrix4 {
   if (node.matrix) return new Matrix4().fromArray(node.matrix);
@@ -51,8 +70,16 @@ describe.skipIf(!fs.existsSync(BUILT))('built base (public/assets/base/base.vrm)
   const doc = fs.existsSync(BUILT) ? readGlb(new Uint8Array(fs.readFileSync(BUILT))) : null!;
 
   test('matches the naming contract', () => {
-    // Task 5 turns the bodyTargets check on.
-    expect(validateBase(doc, { bodyTargets: false })).toEqual([]);
+    expect(validateBase(doc)).toEqual([]);
+  });
+
+  test('base.json is valid and measures the exported Body', () => {
+    const meta = baseMetaSchema.parse(JSON.parse(fs.readFileSync(META, 'utf8')));
+    const [minY, maxY] = bodyMinMaxY(doc);
+    expect(meta.minY).toBeCloseTo(minY, 4);
+    expect(meta.heightM).toBeCloseTo(maxY - minY, 4);
+    expect(Object.keys(meta.morphHeightDelta).sort()).toEqual([...ALL_BODY_TARGETS].sort());
+    expect(Object.keys(meta.morphMinYDelta).sort()).toEqual([...ALL_BODY_TARGETS].sort());
   });
 
   test('each expression preset binds its key at weight 1 on every mesh but the eyes', () => {
@@ -90,13 +117,7 @@ describe.skipIf(!fs.existsSync(BUILT))('built base (public/assets/base/base.vrm)
   });
 
   test('the body is between 1.5 and 1.85 m tall', () => {
-    let minY = Infinity;
-    let maxY = -Infinity;
-    for (const p of mesh(doc, BODY_MESH).primitives) {
-      const position = doc.json.accessors[p.attributes.POSITION];
-      minY = Math.min(minY, position.min[1]);
-      maxY = Math.max(maxY, position.max[1]);
-    }
+    const [minY, maxY] = bodyMinMaxY(doc);
     expect(maxY - minY).toBeGreaterThan(1.5);
     expect(maxY - minY).toBeLessThan(1.85);
   });

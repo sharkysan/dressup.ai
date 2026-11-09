@@ -4,8 +4,10 @@
 
 Writes <work>/base.vrm: a MakeHuman (MPFB) female in a T-pose, game_engine rig, GAMEENGINE (plain PBR)
 materials, eyes, brows, lashes, teeth and tongue, the VRM expressions happy, relaxed, surprised and
-blinkLeft baked from faceunits01 (targets.py), every object and material named per the contract that
-tools/build-base.ts writes from src/avatar/baseContract.ts. Exits 1 if any step or the export fails.
+blinkLeft baked from faceunits01 (targets.py), the body-shape shape keys baked from MakeHuman probes
+(bake.py), every object and material named per the contract that tools/build-base.ts writes from
+src/avatar/baseContract.ts. Writes <work>/base.json: the Body's height and lowest point, and how much
+each body target changes them (baseMetaSchema). Exits 1 if any step or the export fails.
 """
 
 import argparse
@@ -16,15 +18,19 @@ from pathlib import Path
 
 import bmesh
 import bpy
+import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from bake import anchored, head_mask, height_and_min, masked_delta  # noqa: E402
 from mpfb import mpfb_service, require_toolchain  # noqa: E402
 from targets import EXPRESSION_RECIPES, mix, parse_target, to_blender  # noqa: E402
 
 # Young adult female, the deepest of MPFB's light skins (MPFB ships only light and dark young female
 # skins; Task 6 neutralises the texture so the runtime tint sets the tone).
 SKIN_MHMAT = "young_caucasian_female2"
+# The base's macros over MPFB's defaults (0.5 each): gender 0, female.
+BASE_MACROS = {"gender": 0.0}
 RIG = "game_engine"
 T_POSE = "game_engine_fk/t-pose.json"
 
@@ -102,6 +108,54 @@ HELPER_GROUPS = ("HelperGeometry", "JointCubes")
 # the eyeballs stay put while the lids, brows and mouth move around them.
 EXPRESSION_PROXIES = ("brows", "lashes", "teeth", "tongue")
 
+# Contract body target -> the one change its probe makes to the base: MPFB macros set to a value, and
+# MPFB targets (data/targets/<dir>/<name>.target.gz) loaded at weight 1.
+BODY_PROBES = {
+    "body_gender_max": {"macros": {"gender": 1.0}},
+    "body_weight_min": {"macros": {"weight": 0.0}},
+    "body_weight_max": {"macros": {"weight": 1.0}},
+    "body_muscle_min": {"macros": {"muscle": 0.0}},
+    "body_muscle_max": {"macros": {"muscle": 1.0}},
+    "body_bust_min": {"macros": {"cupsize": 0.0}},
+    "body_bust_max": {"macros": {"cupsize": 1.0}},
+    "body_shoulders_min": {"targets": ["torso/measure-shoulder-dist-decr"]},
+    "body_shoulders_max": {"targets": ["torso/measure-shoulder-dist-incr"]},
+    "body_waist_min": {"targets": ["torso/measure-waist-circ-decr"]},
+    "body_waist_max": {"targets": ["torso/measure-waist-circ-incr"]},
+    "body_hips_min": {"targets": ["torso/measure-hips-circ-decr"]},
+    "body_hips_max": {"targets": ["torso/measure-hips-circ-incr"]},
+    "body_legLength_min": {
+        "targets": ["legs/measure-upperleg-height-decr", "legs/measure-lowerleg-height-decr"]
+    },
+    "body_legLength_max": {
+        "targets": ["legs/measure-upperleg-height-incr", "legs/measure-lowerleg-height-incr"]
+    },
+    "body_armLength_min": {
+        "targets": ["arms/measure-upperarm-length-decr", "arms/measure-lowerarm-length-decr"]
+    },
+    "body_armLength_max": {
+        "targets": ["arms/measure-upperarm-length-incr", "arms/measure-lowerarm-length-incr"]
+    },
+}
+
+# Pairs of body targets whose summed deltas are compared, in the log only, with a probe that makes both
+# changes: the runtime adds morphs linearly, MakeHuman's macros don't combine quite linearly.
+BODY_CORNERS = (
+    ("body_gender_max", "body_weight_max"),
+    ("body_gender_max", "body_muscle_max"),
+    ("body_weight_min", "body_muscle_max"),
+    ("body_weight_max", "body_bust_max"),
+)
+
+# Vertex groups (game_engine bones) -> their share of a vertex's head weight. Body morphs are zeroed on
+# the head and fade in down the neck (spec §7).
+HEAD_GROUPS = {"head": 1.0, "neck_01": 0.5}
+# A body morph may move a vertex with head weight >= HEAD_WEIGHT_STILL by at most HEAD_STILL_M.
+HEAD_WEIGHT_STILL = 0.999
+HEAD_STILL_M = 1e-6
+# An unchanged probe must reproduce the base this closely, or every body delta is polluted.
+PROBE_TOLERANCE_M = 1e-5
+
 VRM_NAME = "Kiss base"
 VRM_AUTHOR = "Kiss"
 
@@ -132,16 +186,16 @@ def clear_scene():
         bpy.data.objects.remove(obj, do_unlink=True)
 
 
-def create_human():
-    """The MakeHuman basemesh: default macros with gender 0 (female), in metres, feet on the ground."""
-    HumanService = mpfb_service("HumanService")
-    TargetService = mpfb_service("TargetService")
-    macros = TargetService.get_default_macro_info_dict()
-    macros["gender"] = 0.0
-    basemesh = HumanService.create_human(scale=0.1, macro_detail_dict=macros)
+def create_human(macros=None):
+    """The MakeHuman basemesh: MPFB's default macros with BASE_MACROS, then `macros`, in metres, feet on
+    the ground."""
+    macros = mpfb_service("TargetService").get_default_macro_info_dict() | BASE_MACROS | (macros or {})
+    return mpfb_service("HumanService").create_human(scale=0.1, macro_detail_dict=macros)
+
+
+def set_skin(basemesh):
     skin = mpfb_data() / "skins" / SKIN_MHMAT / f"{SKIN_MHMAT}.mhmat"
-    HumanService.set_character_skin(str(skin), basemesh, skin_type="GAMEENGINE")
-    return basemesh
+    mpfb_service("HumanService").set_character_skin(str(skin), basemesh, skin_type="GAMEENGINE")
 
 
 def add_rig(basemesh):
@@ -171,6 +225,13 @@ def apply_t_pose(rig):
     bpy.ops.object.mode_set(mode="OBJECT")
 
 
+def remove_mask_and_subsurf(obj):
+    """Removes MPFB's Mask (hidden helpers) and Subdivision modifiers: the mesh keeps its full topology."""
+    for modifier in list(obj.modifiers):
+        if modifier.type in ("MASK", "SUBSURF"):
+            obj.modifiers.remove(modifier)
+
+
 def bake_pose_as_rest(rig, meshes):
     """Makes the current (T-)pose the rest pose: meshes keep their posed shape with no shape keys and
     only an Armature modifier, and the rig's rest matches it."""
@@ -178,9 +239,7 @@ def bake_pose_as_rest(rig, meshes):
         activate(obj)
         if obj.data.shape_keys:
             bpy.ops.object.shape_key_remove(all=True, apply_mix=True)
-        for modifier in list(obj.modifiers):
-            if modifier.type in ("MASK", "SUBSURF"):
-                obj.modifiers.remove(modifier)
+        remove_mask_and_subsurf(obj)
         for modifier in list(obj.modifiers):
             if modifier.type == "ARMATURE":
                 bpy.ops.object.modifier_apply(modifier=modifier.name)
@@ -204,6 +263,13 @@ def vertex_coords(mesh):
     coords = [0.0] * (3 * len(mesh.vertices))
     mesh.vertices.foreach_get("co", coords)
     return coords
+
+
+def coords_array(points):
+    """The `co` of each of points (a mesh's vertices, a shape key's data) as an (N, 3) float64 array."""
+    coords = np.empty(3 * len(points), dtype=np.float32)
+    points.foreach_get("co", coords)
+    return coords.reshape(-1, 3).astype(np.float64)
 
 
 def add_shape_key(obj, name, coords):
@@ -266,14 +332,151 @@ def bake_expressions(contract, basemesh, proxies):
         capture_shape_keys(basemesh, proxies[key], key_names.values())
 
 
+def vertex_group_weights(obj, name):
+    """Each vertex's weight in obj's vertex group `name`, 0 if it isn't in the group, as an (N,) array."""
+    group = obj.vertex_groups[name].index
+    weights = np.zeros(len(obj.data.vertices))
+    for vertex in obj.data.vertices:
+        for element in vertex.groups:
+            if element.group == group:
+                weights[vertex.index] = element.weight
+    return weights
+
+
+def head_weights(obj):
+    """Each vertex's head weight (HEAD_GROUPS), as an (N,) array."""
+    return sum(share * vertex_group_weights(obj, name) for name, share in HEAD_GROUPS.items())
+
+
+def helper_vertices(basemesh):
+    """True for each vertex in a HELPER_GROUPS vertex group: the ones delete_helper_vertices deletes."""
+    groups = {basemesh.vertex_groups[name].index for name in HELPER_GROUPS}
+    return np.array([any(g.group in groups for g in v.groups) for v in basemesh.data.vertices])
+
+
+def datablocks():
+    """Every datablock in bpy.data."""
+    return set(bpy.data.user_map())
+
+
+def probe(change):
+    """The full-topology vertex coordinates (N, 3) of a human made like the base plus `change` (macros
+    set, targets loaded at weight 1; see BODY_PROBES), rigged and T-posed like the base and evaluated
+    through the depsgraph. Everything the probe adds to bpy.data is deleted again."""
+    before = datablocks()
+    try:
+        basemesh = create_human(change.get("macros"))
+        targets = Path(mpfb_service("LocationService").get_mpfb_data("targets"))
+        for target in change.get("targets", ()):
+            path = targets / f"{target}.target.gz"
+            mpfb_service("TargetService").load_target(basemesh, str(path), weight=1.0)
+        apply_t_pose(add_rig(basemesh))
+        remove_mask_and_subsurf(basemesh)
+        evaluated = basemesh.evaluated_get(bpy.context.evaluated_depsgraph_get())
+        coords = coords_array(evaluated.to_mesh().vertices)
+        evaluated.to_mesh_clear()
+        if len(coords) != len(basemesh.data.vertices):
+            raise RuntimeError(f"probe {change}: evaluated to {len(coords)} vertices, not the full mesh")
+        return coords
+    finally:
+        bpy.data.batch_remove(datablocks() - before)
+        leftover = datablocks() - before
+        if leftover:
+            raise RuntimeError(f"probe {change} left {sorted(block.name for block in leftover)} behind")
+
+
+def combine(a, b):
+    """The probe change that makes both changes a and b."""
+    return {
+        "macros": a.get("macros", {}) | b.get("macros", {}),
+        "targets": [*a.get("targets", ()), *b.get("targets", ())],
+    }
+
+
+def bake_body_shapes(contract, basemesh):
+    """Adds each contract body target as a shape key on the basemesh: its probe's T-posed shape minus the
+    base's, head-masked (spec §7). Runs after the expression keys and before delete_helper_vertices, so
+    probes and basemesh share vertex indices. Returns base.json's content, measured on the vertices
+    that are kept.
+
+    Body morphs never move the head, so each probe is first translated to hold its head where the
+    base's is (which also drops MPFB's per-human feet-on-ground offset): the gender macro raises
+    MakeHuman's whole upper body ~13 cm, which a mask alone would leave to the neck. A taller body
+    then grows downwards, and base.json's lowest-point deltas let the runtime put the feet back on the
+    ground."""
+    names = contract["bodyTargets"]
+    if set(names) != set(BODY_PROBES):
+        raise RuntimeError(f"contract body targets {sorted(names)} != probes {sorted(BODY_PROBES)}")
+    # base.json reads object-space z as the exported glTF y, which needs the Body at the world origin.
+    if not np.allclose(np.array(basemesh.matrix_world), np.eye(4)):
+        raise RuntimeError(f"{basemesh.name} is not at the world origin")
+    full = coords_array(basemesh.data.vertices)
+    kept = ~helper_vertices(basemesh)
+    base = full[kept]
+    weights = head_weights(basemesh)[kept]
+    head = weights >= HEAD_WEIGHT_STILL
+    # Wholly head from HEAD_WEIGHT_STILL up: some head vertices carry a trace of neck_01 (w ~ 0.999),
+    # and 1 - w of a centimetre-sized delta would still move them.
+    mask = head_mask(np.where(head, 1.0, weights))
+
+    def body_delta(change):
+        """(the probe's masked delta, how far the probe's head was moved to hold it still)"""
+        raw = probe(change)[kept]
+        variant = anchored(raw, base, head)
+        return masked_delta(variant, base, mask), np.linalg.norm(raw[0] - variant[0])
+
+    error = np.linalg.norm(probe({})[kept] - base, axis=1).max()
+    print(f"build_base: unchanged probe vs base: {error:.1e} m")
+    if error > PROBE_TOLERANCE_M:
+        raise RuntimeError(f"an unchanged probe is {error:.1e} m off the base (> {PROBE_TOLERANCE_M} m)")
+
+    height, lowest = height_and_min(base)
+    meta = {"version": 1, "heightM": height, "minY": lowest, "morphHeightDelta": {}, "morphMinYDelta": {}}
+    deltas = {}
+    for name in names:
+        delta, shift = body_delta(BODY_PROBES[name])
+        deltas[name] = delta
+        coords = full.copy()
+        coords[kept] += delta
+        add_shape_key(basemesh, name, coords.astype(np.float32).ravel())
+        morph_height, morph_lowest = height_and_min(base + delta)
+        dh = meta["morphHeightDelta"][name] = morph_height - height
+        dmin = meta["morphMinYDelta"][name] = morph_lowest - lowest
+        moved = np.linalg.norm(delta, axis=1)
+        print(
+            f"build_base: {name}: moves {np.count_nonzero(moved > HEAD_STILL_M)} vertices up to "
+            f"{moved.max() * 1000:.1f} mm (head held still by {shift * 1000:.1f} mm); "
+            f"height {dh * 100:+.2f} cm, lowest point {dmin * 100:+.2f} cm"
+        )
+    print(f"build_base: {len(names)} body targets")
+
+    for a, b in BODY_CORNERS:
+        both, _ = body_delta(combine(BODY_PROBES[a], BODY_PROBES[b]))
+        error = np.linalg.norm(deltas[a] + deltas[b] - both, axis=1).max()
+        print(f"build_base: corner {a} + {b}: largest error {error * 1000:.1f} mm")
+    return meta
+
+
+def assert_head_still(contract, body):
+    """Fails unless every body target moves each vertex with head weight >= HEAD_WEIGHT_STILL by at
+    most HEAD_STILL_M (spec §7)."""
+    head = head_weights(body) >= HEAD_WEIGHT_STILL
+    keys = body.data.shape_keys.key_blocks
+    basis = coords_array(keys["Basis"].data)
+    for name in contract["bodyTargets"]:
+        moved = np.linalg.norm(coords_array(keys[name].data) - basis, axis=1)[head].max()
+        if moved > HEAD_STILL_M:
+            raise RuntimeError(f"body target {name} moves the head by {moved:.1e} m")
+    print(f"build_base: head untouched by body morphs: OK ({np.count_nonzero(head)} head vertices)")
+
+
 def delete_helper_vertices(basemesh):
     """Deletes the helper and joint-cube vertices with bmesh, which keeps any shape-key layers."""
-    groups = {basemesh.vertex_groups[name].index for name in HELPER_GROUPS}
+    helpers = helper_vertices(basemesh)
     mesh = basemesh.data
     bm = bmesh.new()
     bm.from_mesh(mesh)
-    deform = bm.verts.layers.deform.verify()
-    doomed = [v for v in bm.verts if any(g in v[deform] for g in groups)]
+    doomed = [v for v in bm.verts if helpers[v.index]]
     bmesh.ops.delete(bm, geom=doomed, context="VERTS")
     bm.to_mesh(mesh)
     bm.free()
@@ -399,6 +602,7 @@ def main():
 
     clear_scene()
     basemesh = create_human()
+    set_skin(basemesh)
     rig = add_rig(basemesh)
     proxies = add_proxies(basemesh)
     meshes = [basemesh, *proxies.values()]
@@ -406,8 +610,10 @@ def main():
     apply_t_pose(rig)
     bake_pose_as_rest(rig, meshes)
     bake_expressions(contract, basemesh, proxies)
+    meta = bake_body_shapes(contract, basemesh)
     removed = delete_helper_vertices(basemesh)
     print(f"build_base: removed {removed} helper vertices")
+    assert_head_still(contract, basemesh)
 
     rename(contract, basemesh, proxies)
     set_alpha_modes(contract, basemesh, proxies)
@@ -415,6 +621,8 @@ def main():
     bind_expressions(contract, rig, meshes)
     export_vrm(rig, args.work / "base.vrm")
     print(f"build_base: wrote {args.work / 'base.vrm'}")
+    (args.work / "base.json").write_text(json.dumps(meta, indent=2))
+    print(f"build_base: wrote {args.work / 'base.json'}")
 
 
 main()
