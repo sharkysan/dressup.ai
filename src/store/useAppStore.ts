@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import type { Catalog } from '../catalog/catalog';
+import type { AvatarMetrics } from '../scene/framing';
 import { defaultParams, type AvatarParams, type OutfitItem, type Slot } from '../catalog/params';
 
 export type AvatarStatus = 'loading' | 'ready' | 'error';
@@ -7,6 +9,10 @@ export type AppState = {
   params: AvatarParams;
   avatarStatus: AvatarStatus;
   avatarError: string | null;
+  catalog: Catalog | null;
+  setCatalog: (catalog: Catalog) => void;
+  avatarMetrics: AvatarMetrics | null;
+  setAvatarMetrics: (metrics: AvatarMetrics | null) => void;
   setParams: (patch: Partial<AvatarParams>) => void;
   setOutfitItem: (slot: Slot, item: OutfitItem | null) => void;
   setAvatarStatus: (status: AvatarStatus, error?: string) => void;
@@ -17,6 +23,8 @@ const initialState = {
   params: defaultParams,
   avatarStatus: 'loading' as AvatarStatus,
   avatarError: null,
+  catalog: null as Catalog | null,
+  avatarMetrics: null as AvatarMetrics | null,
 };
 
 /** `full` (dress/jumpsuit) occupies top+bottom, so the three can never coexist (spec §5). */
@@ -50,6 +58,10 @@ export const useAppStore = create<AppState>()((set) => ({
       avatarStatus: status,
       avatarError: status === 'error' ? (error ?? 'Unknown error') : null,
     }),
+
+  setCatalog: (catalog) => set({ catalog }),
+
+  setAvatarMetrics: (metrics) => set({ avatarMetrics: metrics }),
 
   reset: () => set(initialState),
 }));

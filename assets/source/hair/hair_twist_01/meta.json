@@ -1,0 +1,7 @@
+{
+  "id": "hair_twist_01",
+  "name": "Long straight with bangs",
+  "base": "a",
+  "tags": { "length": "long", "volume": "medium", "bangs": true, "parting": "center" },
+  "license": "VRM Public License 1.0 — dev only"
+}

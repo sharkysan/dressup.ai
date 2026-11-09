@@ -1,10 +1,12 @@
 import { OrbitControls } from '@react-three/drei';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useEffect } from 'react';
+import { loadCatalog } from '../catalog/catalog';
 import { AvatarModel } from '../avatar/AvatarModel';
 import { BASE_A_URL } from '../avatar/loadVrm';
 import { useAppStore } from '../store/useAppStore';
 import { strings } from '../ui/strings';
+import { Framing } from './Framing';
 import { setViewerHandle } from './viewerHandle';
 
 /** Publishes the live renderer/scene/camera for the export module. */
@@ -21,6 +23,13 @@ const BACKDROP_COLOR = '#e9e5dc';
 
 export function Viewer() {
   const status = useAppStore((s) => s.avatarStatus);
+  const setCatalog = useAppStore((s) => s.setCatalog);
+
+  useEffect(() => {
+    loadCatalog()
+      .then(setCatalog)
+      .catch((error: unknown) => console.warn('catalog unavailable; hairstyles disabled:', error));
+  }, [setCatalog]);
 
   return (
     <div
@@ -28,12 +37,19 @@ export function Viewer() {
       data-status={status}
       style={{ position: 'relative', width: '100%', height: '100%' }}
     >
-      <Canvas dpr={[1, 2]} camera={{ position: [0, 1.0, 3.2], fov: 30 }} gl={{ antialias: true }}>
+      <Canvas dpr={[1, 2]} camera={{ position: [0, 0.85, 3.3], fov: 30 }} gl={{ antialias: true }}>
         {/* The backdrop lives in the GL scene so exports show exactly what the screen shows. */}
         <color attach="background" args={[BACKDROP_COLOR]} />
         <hemisphereLight intensity={1.2} groundColor="#8a8070" />
         <directionalLight position={[2, 4, 3]} intensity={1.5} />
-        <OrbitControls enablePan={false} target={[0, 0.85, 0]} minDistance={0.8} maxDistance={5} />
+        <OrbitControls
+          makeDefault
+          enablePan={false}
+          enableDamping={false}
+          minDistance={0.4}
+          maxDistance={5}
+        />
+        <Framing />
         <AvatarModel key={BASE_A_URL} url={BASE_A_URL} />
         <HandlePublisher />
       </Canvas>

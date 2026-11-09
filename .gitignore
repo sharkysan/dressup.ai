@@ -32,4 +32,9 @@ playwright-report
 .env*
 
 # large binary assets are fetched, not committed (tools/fetch-placeholder-vrm.sh)
-public/assets/avatars/*.vrm
+
+# source and built binary assets are fetched/built, never committed
+assets/source/**/*.vrm
+public/assets/**/*.vrm
+public/assets/**/*.glb
+public/assets/catalog.json
