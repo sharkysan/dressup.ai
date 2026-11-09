@@ -2,13 +2,13 @@ import type { Catalog } from '../../catalog/catalog';
 import { avatarParamsSchema, defaultParams, type AvatarParams } from '../../catalog/params';
 import type { Calibration } from '../calibration';
 import { medianColorTrimmed } from '../color';
-import { headPose, toPixels } from '../landmarks';
-import { categoryEquals, resampleMask } from '../masks';
+import { faceBox as boxOf, headPose, toPixels } from '../landmarks';
+import { categoryEquals, resampleMask, restrictToBox } from '../masks';
 import { MASK, type Analysis, type Box } from '../types';
 import { extractBrows } from './brows';
 import { extractEyeColor } from './eyes';
 import { measureRatios, ratiosToFaceShape, type Ratios } from './faceShape';
-import { browRegionMask, hairTags, type HairTags } from './hair';
+import { browRegionMask, hairRegion, hairTags, type HairTags } from './hair';
 import { extractHairColor } from './hairColor';
 import { rankHairstyles } from './hairstyle';
 import { extractLipTint } from './lips';
@@ -43,7 +43,14 @@ export function analyzeToParams(
   const upscale = (category: number) =>
     resampleMask(categoryEquals(mask, category), mask.width, mask.height, width, height);
   const faceSkin = upscale(MASK.faceSkin);
-  const hair = upscale(MASK.hair);
+  // Hair is only considered within the region around this face (spec §6), for tags *and* colour,
+  // so another person's hair never sets the avatar's hair colour.
+  const hair = restrictToBox(
+    upscale(MASK.hair),
+    width,
+    height,
+    hairRegion(boxOf(pixels), width, height),
+  );
 
   const skin = extractSkin(image, faceSkin, pixels);
   const tags = hairTags(hair, width, height, pixels);

@@ -23,6 +23,27 @@ test('a 20° roll gives the same ratios as upright (within 1%)', () => {
     expect(Math.abs(rolled[k] - upright[k]) / upright[k]).toBeLessThan(0.01);
 });
 
+test('a 25° yaw gives the same ratios as upright (within 1%) — pose normalisation', () => {
+  const upright = measureRatios(synthFace().face);
+  const yawed = measureRatios(synthFace({ yawDeg: 25 }).face);
+  for (const k of RATIO_KEYS)
+    expect(Math.abs(yawed[k] - upright[k]) / upright[k]).toBeLessThan(0.01);
+});
+
+test('a 20° pitch gives the same ratios as upright (within 1%)', () => {
+  const upright = measureRatios(synthFace().face);
+  const pitched = measureRatios(synthFace({ pitchDeg: 20 }).face);
+  for (const k of RATIO_KEYS)
+    expect(Math.abs(pitched[k] - upright[k]) / upright[k]).toBeLessThan(0.01);
+});
+
+test('combined yaw, pitch and roll still give upright ratios', () => {
+  const upright = measureRatios(synthFace().face);
+  const turned = measureRatios(synthFace({ yawDeg: -20, pitchDeg: 15, rollDeg: 12 }).face);
+  for (const k of RATIO_KEYS)
+    expect(Math.abs(turned[k] - upright[k]) / upright[k]).toBeLessThan(0.01);
+});
+
 test('ratios are scale invariant', () => {
   const a = measureRatios(synthFace({ scale: 3 }).face);
   const b = measureRatios(synthFace({ scale: 6 }).face);

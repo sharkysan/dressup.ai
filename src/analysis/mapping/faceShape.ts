@@ -1,6 +1,6 @@
 import type { AvatarParams } from '../../catalog/params';
 import type { Calibration } from '../calibration';
-import { centreOf, dist, faceBox, headPose, LM, rollCorrected, toPixels } from '../landmarks';
+import { dist, faceAligned, LM } from '../landmarks';
 import type { FaceObservation } from '../types';
 
 export const RATIO_KEYS = [
@@ -30,10 +30,9 @@ export const RATIO_TO_PARAM: Record<RatioKey, keyof AvatarParams['faceShape']> =
 /** Spec §6: weights are z-scores clamped to −1..1 then ×0.8 so extremes stay stylised. */
 export const WEIGHT_SCALE = 0.8;
 
-/** Scale- and roll-invariant face proportions from the landmarks (spec §6 table). */
+/** Scale- and pose-invariant face proportions from the pose-normalised landmarks (spec §6 table). */
 export function measureRatios(face: FaceObservation): Ratios {
-  const raw = toPixels(face);
-  const p = rollCorrected(raw, headPose(face.matrix).roll, centreOf(faceBox(raw)));
+  const p = faceAligned(face);
   const at = (i: number) => p[i]!;
   const faceW = dist(at(LM.cheekR), at(LM.cheekL));
   const faceH = dist(at(LM.faceTop), at(LM.chin));

@@ -1,9 +1,10 @@
 import {
+  dist,
+  faceAligned,
   faceBox,
   headPose,
   LM,
   polygonMask,
-  rollCorrected,
   toPixels,
 } from '../../src/analysis/landmarks';
 import { synthFace } from '../../tools/test-fixtures/canonicalFace';
@@ -19,17 +20,26 @@ test('headPose recovers the roll and yaw the fixture applied', () => {
   expect(headPose(synthFace({ yawDeg: 25 }).face.matrix).yaw).toBeCloseTo(25, 5);
 });
 
-test('rollCorrected puts the chin directly below the forehead again', () => {
-  const { face } = synthFace({ rollDeg: 20 });
+test('faceAligned puts the chin directly below the forehead for a rolled, turned head', () => {
+  const { face } = synthFace({ rollDeg: 20, yawDeg: 15, pitchDeg: -10 });
   const px = toPixels(face);
-  const tilted = Math.abs(px[LM.chin]!.x - px[LM.faceTop]!.x);
-  expect(tilted).toBeGreaterThan(20);
-  const box = faceBox(px);
-  const fixed = rollCorrected(px, headPose(face.matrix).roll, {
-    x: box.x + box.width / 2,
-    y: box.y + box.height / 2,
-  });
-  expect(Math.abs(fixed[LM.chin]!.x - fixed[LM.faceTop]!.x)).toBeLessThan(0.5);
+  expect(Math.abs(px[LM.chin]!.x - px[LM.faceTop]!.x)).toBeGreaterThan(20);
+  const aligned = faceAligned(face);
+  expect(Math.abs(aligned[LM.chin]!.x - aligned[LM.faceTop]!.x)).toBeLessThan(1e-6);
+  expect(aligned[LM.chin]!.y).toBeGreaterThan(aligned[LM.faceTop]!.y); // y grows downward
+});
+
+test('faceAligned preserves face-plane distances across poses', () => {
+  const upright = faceAligned(synthFace().face);
+  const turned = faceAligned(synthFace({ yawDeg: 25, pitchDeg: 15, rollDeg: 10 }).face);
+  const pairs: [number, number][] = [
+    [LM.cheekR, LM.cheekL],
+    [LM.faceTop, LM.chin],
+    [LM.eyeR.outer, LM.eyeL.outer],
+    [LM.noseBridge, LM.noseBottom],
+  ];
+  for (const [a, b] of pairs)
+    expect(dist(turned[a]!, turned[b]!)).toBeCloseTo(dist(upright[a]!, upright[b]!), 4);
 });
 
 test('faceBox is centred where the fixture placed the face', () => {

@@ -61,7 +61,8 @@ test('a successful analysis applies params, shows ratios and marks done', async 
   expect(await screen.findByTestId('ratio-faceAspect')).toBeInTheDocument();
   expect(screen.getAllByTestId(/^ratio-/)).toHaveLength(8);
   expect(screen.getByTestId('analysis-status')).toHaveAttribute('data-analysis', 'done');
-  expect(useAppStore.getState().params.skin).toBe(result.params.skin);
+  // Whole-object equality: skin alone is vacuous because the fixture's default skin equals defaultParams.skin.
+  expect(useAppStore.getState().params).toEqual(result.params);
 });
 
 test('Add to calibration set increments the counter', async () => {

@@ -28,10 +28,12 @@ export type SynthOptions = {
   scale?: number; // px per cm
   rollDeg?: number;
   yawDeg?: number;
+  pitchDeg?: number;
   centre?: Point2;
   hair?: HairSpec;
   colors?: { skin?: string; hair?: string; iris?: string; lips?: string; background?: string };
-  secondFace?: { scale: number; centre: Point2 };
+  /** A second, upright person; `hairColor` paints their hair differently to test region isolation. */
+  secondFace?: { scale: number; centre: Point2; hairColor?: string };
   /** Lift the upper-brow points by this fraction of the brow chord (brow shape tests). */
   browLift?: { amount: number; outerOnly?: boolean };
 };
@@ -225,12 +227,13 @@ export function synthFace(opts: SynthOptions = {}): {
   const centre = opts.centre ?? { x: width / 2, y: height / 2 };
   const hair: HairSpec = opts.hair ?? { length: 'medium', bangs: false, volume: 'medium' };
   const points = loadCanonical();
-  const matrix = rotationMatrix(opts.yawDeg ?? 0, 0, opts.rollDeg ?? 0);
+  const matrix = rotationMatrix(opts.yawDeg ?? 0, opts.pitchDeg ?? 0, opts.rollDeg ?? 0);
   const face = projectFace(points, matrix, scale, centre, width, height, opts.browLift);
   const faces = [face];
 
   const cat = new Uint8Array(width * height); // background = 0
   paintCategories(cat, width, height, face, hair);
+  const otherCat = new Uint8Array(width * height);
   if (opts.secondFace) {
     const other = projectFace(
       points,
@@ -240,7 +243,8 @@ export function synthFace(opts: SynthOptions = {}): {
       width,
       height,
     );
-    paintCategories(cat, width, height, other, { length: 'long', volume: 'high' });
+    paintCategories(otherCat, width, height, other, { length: 'long', volume: 'high' });
+    for (let i = 0; i < cat.length; i++) if (otherCat[i]) cat[i] = otherCat[i]!;
     faces.push(other);
   }
 
@@ -270,6 +274,11 @@ export function synthFace(opts: SynthOptions = {}): {
     data[i * 4 + 1] = c[1];
     data[i * 4 + 2] = c[2];
     data[i * 4 + 3] = 255;
+  }
+  if (opts.secondFace?.hairColor) {
+    const otherHair = rgb(opts.secondFace.hairColor);
+    for (let i = 0; i < otherCat.length; i++)
+      if (otherCat[i] === MASK.hair) data.set([...otherHair, 255], i * 4);
   }
   const px = toPixels(face);
   const lips = polygonMask(px, LM.outerLips, width, height);

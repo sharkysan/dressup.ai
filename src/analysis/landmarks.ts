@@ -1,4 +1,4 @@
-import type { Box, FaceObservation, Point2 } from './types';
+import type { Box, FaceObservation, Point2, Point3 } from './types';
 
 /** MediaPipe Face Landmarker indices used by the analysis (spec §6). R/L are the subject's right/left. */
 export const LM = {
@@ -59,16 +59,28 @@ function round(v: number): number {
   return Math.abs(v) < 1e-9 ? 0 : v;
 }
 
-/** Undoes a head roll in image space (y down): rotates every point by +roll about `about`. */
-export function rollCorrected(points: Point2[], rollDeg: number, about: Point2): Point2[] {
-  const r = (rollDeg * Math.PI) / 180;
-  const c = Math.cos(r);
-  const s = Math.sin(r);
-  return points.map((p) => {
-    const dx = p.x - about.x;
-    const dy = p.y - about.y;
-    return { x: about.x + dx * c - dy * s, y: about.y + dx * s + dy * c };
-  });
+/**
+ * Pose-normalised landmarks: projects the 3-D landmarks onto the face's own plane, spanned by the
+ * cheek-to-cheek axis and the chin-to-forehead axis (Gram–Schmidt). Removes yaw, pitch and roll
+ * together without depending on the transformation matrix's sign convention; distances along the
+ * face are preserved, so ratios measured here are pose-invariant. y grows downward, like pixels.
+ * MediaPipe's z shares x's scale (normalised by image width), hence z·imageWidth.
+ */
+export function faceAligned(face: FaceObservation): Point2[] {
+  const W = face.imageWidth;
+  const H = face.imageHeight;
+  const pts: Point3[] = face.landmarks.map((p) => ({ x: p.x * W, y: p.y * H, z: p.z * W }));
+  const sub = (a: Point3, b: Point3): Point3 => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
+  const dot = (a: Point3, b: Point3) => a.x * b.x + a.y * b.y + a.z * b.z;
+  const unit = (a: Point3): Point3 => {
+    const n = Math.hypot(a.x, a.y, a.z) || 1;
+    return { x: a.x / n, y: a.y / n, z: a.z / n };
+  };
+  const u = unit(sub(pts[LM.cheekL]!, pts[LM.cheekR]!));
+  const v0 = sub(pts[LM.chin]!, pts[LM.faceTop]!);
+  const along = dot(v0, u);
+  const v = unit({ x: v0.x - along * u.x, y: v0.y - along * u.y, z: v0.z - along * u.z });
+  return pts.map((p) => ({ x: dot(p, u), y: dot(p, v) }));
 }
 
 /** Bounding box of the face oval landmarks, in pixels. */
@@ -85,10 +97,6 @@ export function faceBox(points: Point2[]): Box {
     if (p.y > maxY) maxY = p.y;
   }
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
-}
-
-export function centreOf(box: Box): Point2 {
-  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 }
 
 /** Scanline-fills the polygon given by `indices` into a width×height 0/1 mask. */

@@ -59,6 +59,27 @@ test('no visible hair → none, and hair colour falls back to the brow region', 
   expect(params.hairColor).toMatch(/^#[0-9a-f]{6}$/);
 });
 
+test("another person's hair outside the face region does not change the hair colour", () => {
+  const primary: SynthOptions = {
+    width: 1200,
+    height: 800,
+    centre: { x: 300, y: 400 },
+    hair: { length: 'short', volume: 'low' },
+  };
+  const opts = { calibration: DEFAULT_CALIBRATION, catalog, base: 'a' as const };
+  const alone = analyzeToParams(analysis(primary), opts);
+  const crowd = analyzeToParams(
+    analysis({
+      ...primary,
+      // Same-size blonde head of long hair, well outside the 2.5× face-width region.
+      secondFace: { scale: 12, centre: { x: 900, y: 400 }, hairColor: '#e6c878' },
+    }),
+    opts,
+  );
+  expect(crowd.debug.hairTags).toEqual(alone.debug.hairTags);
+  expect(crowd.params.hairColor).toBe(alone.params.hairColor);
+});
+
 test('keeps unrelated fields from the current params', () => {
   const current = {
     ...analyzeToParams(analysis(), { calibration: DEFAULT_CALIBRATION, catalog, base: 'a' }).params,
