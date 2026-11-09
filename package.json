@@ -13,7 +13,12 @@
     "test:watch": "vitest",
     "format": "prettier --write .",
     "e2e": "playwright test",
-    "ci": "npm run lint && npm run typecheck && npm test && npm run build && npm run e2e"
+    "ci": "npm run lint && npm run typecheck && npm test && npm run build && npm run e2e",
+    "assets:fetch-dev": "./tools/fetch-dev-samples.sh",
+    "assets:synth": "tsx tools/synth-variants.ts --src assets/source/base-a/neutral.vrm --out assets/source/base-a/morphs",
+    "assets:base": "tsx tools/build-base.ts --src assets/source/base-a --out public/assets/avatars/base-a.vrm --webp",
+    "assets": "npm run assets:base",
+    "assets:dev": "npm run assets:fetch-dev && npm run assets:synth && npm run assets"
   },
   "dependencies": {
     "@pixiv/three-vrm": "^3.5.5",
@@ -41,6 +46,7 @@
     "oxlint": "^1.90.0",
     "pngjs": "^7.0.0",
     "prettier": "^3.9.10",
+    "sharp": "^0.35.5",
     "tsx": "^4.23.15",
     "typescript": "~7.0.2",
     "vite": "^8.3.6",

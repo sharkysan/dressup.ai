@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import type { GlbDoc } from './types';
 
 export type TypedArray = Float32Array | Uint32Array | Uint16Array | Uint8Array;
@@ -42,40 +43,80 @@ function viewFor(componentType: number, buffer: ArrayBuffer): TypedArray {
   }
 }
 
-/** Reads an accessor into a tight typed array (handles byteStride; no sparse support). */
-export function readAccessor(doc: GlbDoc, index: number): TypedArray {
-  const acc = doc.json.accessors[index];
-  if (!acc) throw new Error(`accessor ${index} missing`);
-  if (acc.sparse) throw new Error('sparse accessors are not supported');
-  const comps = COMPONENTS[acc.type as AccessorType];
-  const out = arrayFor(acc.componentType, acc.count * comps);
-  if (acc.bufferView === undefined) return out; // all zeros per spec
-  const bv = doc.json.bufferViews[acc.bufferView]!;
+/** Reads `count` elements of `comps` components from a bufferView (handles byteStride) into a tight array. */
+function readFromView(
+  doc: GlbDoc,
+  bufferView: number,
+  byteOffset: number,
+  componentType: number,
+  count: number,
+  comps: number,
+): TypedArray {
+  const bv = doc.json.bufferViews[bufferView]!;
+  const out = arrayFor(componentType, count * comps);
   const elementBytes = out.BYTES_PER_ELEMENT * comps;
   const stride = bv.byteStride ?? elementBytes;
-  const base = (bv.byteOffset ?? 0) + (acc.byteOffset ?? 0);
+  const base = (bv.byteOffset ?? 0) + byteOffset;
   if (stride === elementBytes) {
     // Copy into a fresh buffer so the typed-array view is aligned regardless of the source offset.
-    const copy = new Uint8Array(acc.count * elementBytes);
+    const copy = new Uint8Array(count * elementBytes);
     copy.set(doc.bin.subarray(base, base + copy.byteLength));
-    return viewFor(acc.componentType, copy.buffer);
+    return viewFor(componentType, copy.buffer);
   }
   const view = new DataView(doc.bin.buffer, doc.bin.byteOffset, doc.bin.byteLength);
-  for (let i = 0; i < acc.count; i++) {
+  for (let i = 0; i < count; i++) {
     const at = base + i * stride;
     for (let c = 0; c < comps; c++) {
       const o = at + c * out.BYTES_PER_ELEMENT;
       out[i * comps + c] =
-        acc.componentType === 5126
+        componentType === 5126
           ? view.getFloat32(o, true)
-          : acc.componentType === 5125
+          : componentType === 5125
             ? view.getUint32(o, true)
-            : acc.componentType === 5123
+            : componentType === 5123
               ? view.getUint16(o, true)
               : view.getUint8(o);
     }
   }
   return out;
+}
+
+/** Reads an accessor into a tight typed array. Supports byteStride and sparse accessors. */
+export function readAccessor(doc: GlbDoc, index: number): TypedArray {
+  const acc = doc.json.accessors[index];
+  if (!acc) throw new Error(`accessor ${index} missing`);
+  const comps = COMPONENTS[acc.type as AccessorType];
+  const dense =
+    acc.bufferView === undefined
+      ? arrayFor(acc.componentType, acc.count * comps) // implicit zeros per spec
+      : readFromView(doc, acc.bufferView, acc.byteOffset ?? 0, acc.componentType, acc.count, comps);
+  if (!acc.sparse) return dense;
+  const { count, indices, values } = acc.sparse as {
+    count: number;
+    indices: { bufferView: number; byteOffset?: number; componentType: number };
+    values: { bufferView: number; byteOffset?: number };
+  };
+  const idx = readFromView(
+    doc,
+    indices.bufferView,
+    indices.byteOffset ?? 0,
+    indices.componentType,
+    count,
+    1,
+  );
+  const val = readFromView(
+    doc,
+    values.bufferView,
+    values.byteOffset ?? 0,
+    acc.componentType,
+    count,
+    comps,
+  );
+  for (let i = 0; i < count; i++) {
+    const v = idx[i]!;
+    for (let c = 0; c < comps; c++) dense[v * comps + c] = val[i * comps + c]!;
+  }
+  return dense;
 }
 
 /** Appends `data` as a new 4-byte-aligned bufferView + accessor; returns the accessor index. */
@@ -86,8 +127,9 @@ export function appendAccessor(
   opts: { minMax?: boolean; target?: 34962 | 34963 } = {},
 ): number {
   const comps = COMPONENTS[type];
-  if (data.length % comps !== 0)
+  if (data.length % comps !== 0) {
     throw new Error(`data length ${data.length} is not a multiple of ${comps}`);
+  }
   const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
   const offset = doc.bin.byteLength;
   const padded = (bytes.byteLength + 3) & ~3;

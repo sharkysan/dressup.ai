@@ -1,0 +1,7 @@
+{
+  "id": "hair_seed_01",
+  "name": "Short swept",
+  "base": "a",
+  "tags": { "length": "short", "volume": "medium", "bangs": true, "parting": "left" },
+  "license": "VRM Public License 1.0 — dev only"
+}

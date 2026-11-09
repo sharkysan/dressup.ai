@@ -52,3 +52,19 @@ test('is a no-op in structure when nothing is unused', () => {
   expect(out.json.accessors.length).toBe(doc.json.accessors.length);
   expect(out.bin.byteLength).toBe(doc.bin.byteLength);
 });
+
+test('VRM 0.x: keeps materialProperties aligned and remaps texture references', () => {
+  const doc = makeGlb({ withHair: true, vrm0: true });
+  const body = doc.json.meshes.find((m: { name: string }) => m.name === 'Body');
+  body.primitives = body.primitives.filter(
+    (p: { material: number }) => !doc.json.materials[p.material].name.endsWith('_HAIR'),
+  );
+  const out = pruneUnused(doc);
+  const props = out.json.extensions.VRM.materialProperties;
+  expect(props.map((p: { name: string }) => p.name)).toEqual(
+    out.json.materials.map((m: { name: string }) => m.name),
+  );
+  for (const p of props) expect(out.json.textures[p.textureProperties._MainTex]).toBeDefined();
+  const thumb = out.json.extensions.VRM.meta.texture;
+  expect(out.json.images[out.json.textures[thumb].source].name).toBe('Thumbnail');
+});

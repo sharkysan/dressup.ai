@@ -7,8 +7,10 @@ import type { GlbDoc } from '../glb/types';
  * a 3-joint skeleton (J_Bip_C_Hips → J_Bip_C_Head → J_Sec_Hair1_01), one 2×2 PNG per material,
  * VRMC_vrm humanoid/meta/expressions, and a VRMC_springBone spring on the hair joint.
  */
-export function makeGlb(opts: { withHair?: boolean; morphTargets?: number } = {}): GlbDoc {
-  const { withHair = false, morphTargets = 0 } = opts;
+export function makeGlb(
+  opts: { withHair?: boolean; morphTargets?: number; vrm0?: boolean } = {},
+): GlbDoc {
+  const { withHair = false, morphTargets = 0, vrm0 = false } = opts;
   const doc: GlbDoc = {
     json: {
       asset: { version: '2.0', generator: 'makeGlb' },
@@ -91,7 +93,52 @@ export function makeGlb(opts: { withHair?: boolean; morphTargets?: number } = {}
     });
   }
 
+  if (vrm0) toVrm0(doc, morphTargets);
+
   return doc;
+}
+
+/** Rewrites the fixture's VRM 1.0 extensions into the VRM 0.x shape (index-based references). */
+function toVrm0(doc: GlbDoc, morphTargets: number): void {
+  const thumbnailTexture = doc.json.textures.length;
+  doc.json.textures.push({ source: 0, sampler: 0 });
+  doc.json.extensionsUsed = ['VRM', 'KHR_materials_unlit'];
+  doc.json.extensions = {
+    VRM: {
+      specVersion: '0.0',
+      meta: { title: 'fixture', texture: thumbnailTexture },
+      humanoid: {
+        humanBones: [
+          { bone: 'hips', node: 3 },
+          { bone: 'head', node: 4 },
+        ],
+      },
+      blendShapeMaster: {
+        blendShapeGroups:
+          morphTargets > 0
+            ? [{ name: 'Joy', presetName: 'joy', binds: [{ mesh: 1, index: 0, weight: 100 }] }]
+            : [],
+      },
+      secondaryAnimation: { boneGroups: [{ comment: 'hair', bones: [5] }], colliderGroups: [] },
+      firstPerson: {
+        meshAnnotations: doc.json.meshes.map((_: unknown, i: number) => ({
+          mesh: i,
+          firstPersonFlag: 'Auto',
+        })),
+      },
+      materialProperties: doc.json.materials.map(
+        (m: { name: string; pbrMetallicRoughness: { baseColorTexture: { index: number } } }) => ({
+          name: m.name,
+          shader: 'VRM/MToon',
+          textureProperties: {
+            _MainTex: m.pbrMetallicRoughness.baseColorTexture.index,
+            _ShadeTexture: m.pbrMetallicRoughness.baseColorTexture.index,
+          },
+        }),
+      ),
+    },
+  };
+  for (const m of doc.json.materials) delete m.extensions;
 }
 
 function identity(): number[] {

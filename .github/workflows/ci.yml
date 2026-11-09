@@ -18,8 +18,8 @@ jobs:
 
       - run: npm ci
 
-      - name: Fetch development placeholder avatar
-        run: ./tools/fetch-placeholder-vrm.sh
+      - name: Fetch dev sample VRMs and build assets
+        run: npm run assets:dev
 
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium

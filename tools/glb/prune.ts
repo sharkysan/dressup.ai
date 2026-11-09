@@ -25,6 +25,13 @@ export function pruneUnused(input: GlbDoc): GlbDoc {
   for (const mesh of json.meshes)
     for (const p of mesh.primitives) if (p.material !== undefined) usedMaterials.add(p.material);
   const materialMap = remap(json.materials.length, usedMaterials);
+  // VRM 0.x keeps a materialProperties array aligned with materials — filter it identically.
+  const vrm0 = json.extensions?.VRM;
+  if (Array.isArray(vrm0?.materialProperties)) {
+    vrm0.materialProperties = vrm0.materialProperties.filter((_: unknown, i: number) =>
+      usedMaterials.has(i),
+    );
+  }
   json.materials = json.materials.filter((_: unknown, i: number) => usedMaterials.has(i));
   for (const mesh of json.meshes)
     for (const p of mesh.primitives)
@@ -33,9 +40,11 @@ export function pruneUnused(input: GlbDoc): GlbDoc {
   // 2. Textures referenced by surviving materials.
   const usedTextures = new Set<number>();
   forEachTextureInfo(json.materials, (info) => usedTextures.add(info.index));
+  forEachVrm0TextureRef(json, (i) => usedTextures.add(i));
   const textureMap = remap(json.textures.length, usedTextures);
   json.textures = json.textures.filter((_: unknown, i: number) => usedTextures.has(i));
   forEachTextureInfo(json.materials, (info) => (info.index = textureMap.get(info.index)!));
+  forEachVrm0TextureRef(json, (i, set) => set(textureMap.get(i)!));
 
   // 3. Images and samplers referenced by surviving textures, plus the VRM thumbnail.
   const usedImages = new Set<number>();
@@ -65,7 +74,13 @@ export function pruneUnused(input: GlbDoc): GlbDoc {
 
   // 5. BufferViews referenced by surviving accessors and images → rebuild BIN.
   const usedViews = new Set<number>();
-  for (const a of json.accessors) if (a.bufferView !== undefined) usedViews.add(a.bufferView);
+  for (const a of json.accessors) {
+    if (a.bufferView !== undefined) usedViews.add(a.bufferView);
+    if (a.sparse) {
+      usedViews.add(a.sparse.indices.bufferView);
+      usedViews.add(a.sparse.values.bufferView);
+    }
+  }
   for (const im of json.images) if (im.bufferView !== undefined) usedViews.add(im.bufferView);
   for (const key of Object.keys(json)) {
     if (['accessors', 'images', 'bufferViews', 'buffers'].includes(key)) continue;
@@ -93,8 +108,13 @@ export function pruneUnused(input: GlbDoc): GlbDoc {
     newViews.push({ ...bv, byteOffset: offset });
   }
   json.bufferViews = newViews;
-  for (const a of json.accessors)
+  for (const a of json.accessors) {
     if (a.bufferView !== undefined) a.bufferView = viewMap.get(a.bufferView)!;
+    if (a.sparse) {
+      a.sparse.indices.bufferView = viewMap.get(a.sparse.indices.bufferView)!;
+      a.sparse.values.bufferView = viewMap.get(a.sparse.values.bufferView)!;
+    }
+  }
   for (const im of json.images)
     if (im.bufferView !== undefined) im.bufferView = viewMap.get(im.bufferView)!;
   json.buffers = [{ byteLength: bin.byteLength }];
@@ -116,6 +136,22 @@ function forEachTextureInfo(materials: any[], fn: (info: { index: number }) => v
     for (const k of MATERIAL_TEXTURES) if (m[k]) fn(m[k]);
     const mtoon = m.extensions?.VRMC_materials_mtoon;
     if (mtoon) for (const k of MTOON_TEXTURES) if (mtoon[k]) fn(mtoon[k]);
+  }
+}
+
+/** VRM 0.x stores texture indices in materialProperties[].textureProperties and meta.texture. */
+function forEachVrm0TextureRef(
+  json: any,
+  fn: (index: number, set: (v: number) => void) => void,
+): void {
+  const vrm0 = json.extensions?.VRM;
+  if (!vrm0) return;
+  if (vrm0.meta?.texture !== undefined && vrm0.meta.texture >= 0)
+    fn(vrm0.meta.texture, (v) => (vrm0.meta.texture = v));
+  for (const mp of vrm0.materialProperties ?? []) {
+    const tp = mp.textureProperties ?? {};
+    for (const k of Object.keys(tp))
+      if (typeof tp[k] === 'number' && tp[k] >= 0) fn(tp[k], (v) => (tp[k] = v));
   }
 }
 

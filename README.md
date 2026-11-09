@@ -27,13 +27,18 @@ Implementation plans live in `docs/superpowers/plans/`.
 
 ## Assets
 
-Large binary assets are not committed. After cloning, fetch the development placeholder avatar:
+Binary assets are never committed. Source VRMs live under `assets/source/` (layout in
+[`assets/source/README.md`](assets/source/README.md)); the pipeline builds `public/assets/`:
 
 ```bash
-./tools/fetch-placeholder-vrm.sh
+npm run assets:dev      # fetch the dev sample VRMs, fake morph variants, build everything
+npm run assets          # rebuild from your own sources in assets/source/
 ```
 
-Licences for every third-party asset are listed in [`assets/LICENSES.md`](assets/LICENSES.md).
+`tools/build-base.ts` strips hair, neutralises skin/iris textures for runtime tinting, adds the
+eight face-shape morph pairs from `morphs/<param>.{min,max}.vrm`, stores morph targets sparsely and
+textures as WebP ≤1024². Licences for every third-party asset are listed in
+[`assets/LICENSES.md`](assets/LICENSES.md).
 
 ## Running the checks
 
