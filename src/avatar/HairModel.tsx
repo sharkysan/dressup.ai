@@ -1,11 +1,15 @@
-import { VRMUtils, type VRM } from '@pixiv/three-vrm';
+import { VRMUtils, type MToonMaterial, type VRM } from '@pixiv/three-vrm';
 import { useEffect, useRef } from 'react';
-import type { Object3D } from 'three';
 import { findHair } from '../catalog/catalog';
 import { useAppStore } from '../store/useAppStore';
 import { loadGlbWithMToon } from './loadGlb';
 import { materialsBySuffix, tintMaterial } from './materials';
 import { attachSkinned, type Attachment } from './skinnedAttach';
+
+/** VRoid names hair materials '*_HAIR'; other tools often just 'hair'. */
+function hairMaterials(root: Parameters<typeof materialsBySuffix>[0]): MToonMaterial[] {
+  return [...new Set([...materialsBySuffix(root, '_HAIR'), ...materialsBySuffix(root, 'hair')])];
+}
 
 const warned = new Set<string>();
 
@@ -23,7 +27,8 @@ export function HairModel({
   hairColor: string;
 }) {
   const catalog = useAppStore((s) => s.catalog);
-  const current = useRef<{ attachment: Attachment; root: Object3D } | null>(null);
+  // Materials are captured before attach: attachSkinned re-parents the meshes out of the loaded root.
+  const current = useRef<{ attachment: Attachment; materials: MToonMaterial[] } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -40,10 +45,10 @@ export function HairModel({
           VRMUtils.deepDispose(root);
           return;
         }
-        for (const m of materialsBySuffix(root, '_HAIR')) tintMaterial(m, hairColor);
-        for (const m of materialsBySuffix(root, 'hair')) tintMaterial(m, hairColor);
+        const materials = hairMaterials(root);
+        for (const m of materials) tintMaterial(m, hairColor);
         const attachment = attachSkinned(vrm, root);
-        current.current = { attachment, root };
+        current.current = { attachment, materials };
       })
       .catch((error: unknown) => {
         if (!cancelled) console.warn(`hairstyle "${hairId}" could not be attached:`, error);
@@ -59,10 +64,7 @@ export function HairModel({
   }, [vrm, hairId, catalog]);
 
   useEffect(() => {
-    const root = current.current?.root;
-    if (!root) return;
-    for (const m of materialsBySuffix(root, '_HAIR')) tintMaterial(m, hairColor);
-    for (const m of materialsBySuffix(root, 'hair')) tintMaterial(m, hairColor);
+    for (const m of current.current?.materials ?? []) tintMaterial(m, hairColor);
   }, [hairColor]);
 
   return null;

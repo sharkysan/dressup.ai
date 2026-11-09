@@ -24,4 +24,7 @@ assets/source/
 - Morph variants must share topology with `neutral.vrm` (same vertex counts per primitive). VRoid keeps
   topology constant across sliders; Blender edits must not add or remove vertices. The build fails loudly otherwise.
 - `npm run assets:synth` fakes variants for development only; never ship synthetic morphs.
-- Hair sources can be any VRoid export; textures are converted to greyscale and tinted at runtime.
+- Hair sources must come from the same base family as the body (VRoid exports for the VRoid bases): a hairstyle is
+  bound to the head in its _source_ model's head-local space, and other tools use different rest-pose conventions,
+  so hair transplanted from a non-VRoid model lands misaligned (see `hair_seed_01`, kept only to test detection).
+  Textures are converted to greyscale and tinted at runtime.

@@ -1,7 +1,12 @@
 {
   "id": "hair_seed_01",
-  "name": "Short swept",
+  "name": "Short swept (dev only: non-VRoid source, misaligned)",
   "base": "a",
-  "tags": { "length": "short", "volume": "medium", "bangs": true, "parting": "left" },
-  "license": "VRM Public License 1.0 — dev only"
+  "tags": {
+    "length": "short",
+    "volume": "medium",
+    "bangs": true,
+    "parting": "left"
+  },
+  "license": "VRM Public License 1.0 \u2014 dev only"
 }

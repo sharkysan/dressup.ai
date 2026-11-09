@@ -54,3 +54,10 @@ test('clearing an empty exclusive slot leaves the worn counterpart alone', () =>
   s.setOutfitItem('top', null);
   expect(useAppStore.getState().params.outfit).toEqual({ full: { id: 'dress_01' } });
 });
+
+test('setAvatarMetrics stores head height and overall height; reset clears them', () => {
+  useAppStore.getState().setAvatarMetrics({ headY: 1.42, height: 1.6 });
+  expect(useAppStore.getState().avatarMetrics).toEqual({ headY: 1.42, height: 1.6 });
+  useAppStore.getState().reset();
+  expect(useAppStore.getState().avatarMetrics).toBeNull();
+});
