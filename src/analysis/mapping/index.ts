@@ -1,34 +1,25 @@
 import type { Catalog } from '../../catalog/catalog';
 import { avatarParamsSchema, defaultParams, type AvatarParams } from '../../catalog/params';
-import type { Calibration } from '../calibration';
 import { medianColorTrimmed } from '../color';
 import { faceBox as boxOf, headPose, toPixels } from '../landmarks';
 import { categoryEquals, resampleMask, restrictToBox } from '../masks';
 import { MASK, type Analysis, type Box } from '../types';
-import { extractBrows } from './brows';
 import { extractEyeColor } from './eyes';
-import { measureRatios, ratiosToFaceShape, type Ratios } from './faceShape';
 import { browRegionMask, hairRegion, hairTags, type HairTags } from './hair';
 import { extractHairColor } from './hairColor';
 import { rankHairstyles } from './hairstyle';
-import { extractLipTint } from './lips';
 import { extractSkin } from './skin';
 
 export type AnalysisDebug = {
   pose: { yaw: number; pitch: number; roll: number };
   faceBox: Box;
-  ratios: Ratios;
-  zScores: Ratios;
   hairTags: HairTags;
   hairCandidates: { id: string; name: string; distance: number }[];
-  swatches: { skin: string; hair: string | null; lips: string; eyeSample: string | null };
-  brows: AvatarParams['brows'];
+  swatches: { skin: string; hair: string | null; eyeSample: string | null };
 };
 
 export type AnalyzeOptions = {
-  calibration: Calibration;
   catalog: Catalog | null;
-  base: 'a' | 'b';
   current?: AvatarParams;
 };
 
@@ -60,22 +51,14 @@ export function analyzeToParams(
     medianColorTrimmed(image, browRegionMask(pixels, width, height), 0.1) ??
     defaultParams.hairColor;
   const eyes = extractEyeColor(image, pixels);
-  const lipTint = extractLipTint(image, pixels);
-  const brows = extractBrows(pixels);
-  const ratios = measureRatios(face);
-  const { faceShape, zScores } = ratiosToFaceShape(ratios, opts.calibration);
-  const ranked = opts.catalog && tags.present ? rankHairstyles(tags, opts.catalog, opts.base) : [];
+  const ranked = opts.catalog && tags.present ? rankHairstyles(tags, opts.catalog) : [];
 
   const params = avatarParamsSchema.parse({
     ...(opts.current ?? defaultParams),
-    base: opts.base,
     skin,
     hairColor,
     eyeColor: eyes.preset,
-    lipTint,
     hair: ranked[0]?.style.id ?? 'none',
-    brows,
-    faceShape,
     pose: 'stand_neutral',
     expression: 'neutral',
   } satisfies AvatarParams);
@@ -85,14 +68,11 @@ export function analyzeToParams(
     debug: {
       pose: headPose(face.matrix),
       faceBox,
-      ratios,
-      zScores,
       hairTags: tags,
       hairCandidates: ranked
         .slice(0, 5)
         .map((r) => ({ id: r.style.id, name: r.style.name, distance: r.distance })),
-      swatches: { skin, hair: hairSwatch, lips: lipTint, eyeSample: eyes.sample },
-      brows,
+      swatches: { skin, hair: hairSwatch, eyeSample: eyes.sample },
     },
   };
 }

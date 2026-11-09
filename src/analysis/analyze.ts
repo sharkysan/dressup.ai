@@ -1,7 +1,6 @@
 import type { Catalog } from '../catalog/catalog';
 import type { AvatarParams } from '../catalog/params';
 import { strings } from '../ui/strings';
-import { DEFAULT_CALIBRATION, type Calibration } from './calibration';
 import { decodePhoto, DecodeError } from './image';
 import { faceBox, headPose, toPixels } from './landmarks';
 import { analyzeToParams, type AnalysisDebug } from './mapping';
@@ -75,8 +74,6 @@ export async function analyzePhoto(
   file: Blob,
   opts: {
     catalog: Catalog | null;
-    base: 'a' | 'b';
-    calibration?: Calibration;
     current?: AvatarParams;
     onProgress?: ModelProgress;
     adapter?: Adapter;
@@ -104,9 +101,7 @@ export async function analyzePhoto(
   const { params, debug } = analyzeToParams(
     { face, mask, image: decoded.image, faceBox: box },
     {
-      calibration: opts.calibration ?? DEFAULT_CALIBRATION,
       catalog: opts.catalog,
-      base: opts.base,
       current: opts.current,
     },
   );

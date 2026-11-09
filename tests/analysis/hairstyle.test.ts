@@ -6,20 +6,19 @@ import {
 import type { HairTags } from '../../src/analysis/mapping/hair';
 import type { Catalog, HairStyle } from '../../src/catalog/catalog';
 
-const style = (id: string, base: 'a' | 'b', tags: HairStyle['tags']): HairStyle => ({
+const style = (id: string, tags: HairStyle['tags']): HairStyle => ({
   id,
   name: id,
-  base,
   url: `/${id}.glb`,
   tags,
 });
 const catalog: Catalog = {
-  version: 1,
-  bases: [{ id: 'a', name: 'A', url: '/a.vrm' }],
+  version: 2,
+  base: { name: 'A', url: '/a.vrm', meta: '/a.json' },
   hair: [
-    style('long_bangs', 'a', { length: 'long', volume: 'medium', bangs: true, parting: 'center' }),
-    style('short_crop', 'a', { length: 'short', volume: 'low', bangs: false, parting: 'none' }),
-    style('bob_b', 'b', { length: 'medium', volume: 'medium', bangs: true, parting: 'left' }),
+    style('long_bangs', { length: 'long', volume: 'medium', bangs: true, parting: 'center' }),
+    style('short_crop', { length: 'short', volume: 'low', bangs: false, parting: 'none' }),
+    style('bob_b', { length: 'medium', volume: 'medium', bangs: true, parting: 'left' }),
   ],
 };
 const longTags: HairTags = {
@@ -37,15 +36,15 @@ test('distance is 0 for matching tags and 4 for long vs short alone', () => {
   ).toBe(4);
 });
 
-test('rankHairstyles sorts ascending and filters by base', () => {
-  const ranked = rankHairstyles(longTags, catalog, 'a');
-  expect(ranked.map((r) => r.style.id)).toEqual(['long_bangs', 'short_crop']);
+test('rankHairstyles sorts ascending by tag distance', () => {
+  const ranked = rankHairstyles(longTags, catalog);
+  expect(ranked.map((r) => r.style.id)).toEqual(['long_bangs', 'bob_b', 'short_crop']);
   expect(ranked[0]!.distance).toBe(0);
 });
 
 test('nearestHairstyle returns the closest id, none without hair or catalog', () => {
-  expect(nearestHairstyle(longTags, catalog, 'a')).toBe('long_bangs');
-  expect(nearestHairstyle({ ...longTags, present: false }, catalog, 'a')).toBe('none');
-  expect(nearestHairstyle(longTags, null, 'a')).toBe('none');
-  expect(nearestHairstyle(longTags, { ...catalog, hair: [] }, 'a')).toBe('none');
+  expect(nearestHairstyle(longTags, catalog)).toBe('long_bangs');
+  expect(nearestHairstyle({ ...longTags, present: false }, catalog)).toBe('none');
+  expect(nearestHairstyle(longTags, null)).toBe('none');
+  expect(nearestHairstyle(longTags, { ...catalog, hair: [] })).toBe('none');
 });

@@ -1,6 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { AnalysisError, analyzePhoto } from '../../src/analysis/analyze';
-import { DEFAULT_CALIBRATION } from '../../src/analysis/calibration';
 import { analyzeToParams } from '../../src/analysis/mapping';
 import { faceBox, toPixels } from '../../src/analysis/landmarks';
 import { useAppStore } from '../../src/store/useAppStore';
@@ -18,7 +17,7 @@ const fx = synthFace();
 const box = faceBox(toPixels(fx.face));
 const result = analyzeToParams(
   { face: fx.face, mask: fx.mask, image: fx.image, faceBox: box },
-  { calibration: DEFAULT_CALIBRATION, catalog: null, base: 'a' },
+  { catalog: null },
 );
 
 function upload() {
@@ -48,7 +47,7 @@ test('a models failure shows the message and a retry button', async () => {
   expect(screen.getByTestId('analysis-status')).toHaveAttribute('data-analysis', 'error');
 });
 
-test('a successful analysis applies params, shows ratios and marks done', async () => {
+test('a successful analysis applies params and marks done', async () => {
   vi.mocked(analyzePhoto).mockResolvedValue({
     ...result,
     face: fx.face,
@@ -58,14 +57,13 @@ test('a successful analysis applies params, shows ratios and marks done', async 
   });
   render(<AnalysisPage />);
   await act(async () => upload());
-  expect(await screen.findByTestId('ratio-faceAspect')).toBeInTheDocument();
-  expect(screen.getAllByTestId(/^ratio-/)).toHaveLength(8);
+  await screen.findByText('Apply to avatar');
   expect(screen.getByTestId('analysis-status')).toHaveAttribute('data-analysis', 'done');
   // Whole-object equality: skin alone is vacuous because the fixture's default skin equals defaultParams.skin.
   expect(useAppStore.getState().params).toEqual(result.params);
 });
 
-test('Add to calibration set increments the counter', async () => {
+test('the calibration controls and ratio table are gone', async () => {
   vi.mocked(analyzePhoto).mockResolvedValue({
     ...result,
     face: fx.face,
@@ -75,7 +73,9 @@ test('Add to calibration set increments the counter', async () => {
   });
   render(<AnalysisPage />);
   await act(async () => upload());
-  await screen.findByTestId('ratio-faceAspect');
-  fireEvent.click(screen.getByText('Add to calibration set'));
-  expect(screen.getByTestId('calibration-count')).toHaveTextContent('1');
+  await screen.findByText('Apply to avatar');
+  expect(screen.queryByText('Add to calibration set')).toBeNull();
+  expect(screen.queryByText('Export calibration.json')).toBeNull();
+  expect(screen.queryByTestId('calibration-count')).toBeNull();
+  expect(screen.queryAllByTestId(/^ratio-/)).toHaveLength(0);
 });

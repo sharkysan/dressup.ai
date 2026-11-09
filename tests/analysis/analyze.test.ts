@@ -42,7 +42,7 @@ beforeEach(() => {
 
 test('happy path returns schema-valid params and segments once', async () => {
   const a = adapter();
-  const result = await analyzePhoto(blob, { catalog: null, base: 'a', adapter: a });
+  const result = await analyzePhoto(blob, { catalog: null, adapter: a });
   expect(avatarParamsSchema.safeParse(result.params).success).toBe(true);
   expect(a.segment).toHaveBeenCalledTimes(1);
   expect(result.faceBox.width).toBeGreaterThan(GATES.minFaceWidthPx);
@@ -56,9 +56,9 @@ test('pickLargest picks the biggest face', () => {
 });
 
 test('no faces → no_face', async () => {
-  await expect(
-    analyzePhoto(blob, { catalog: null, base: 'a', adapter: adapter([]) }),
-  ).rejects.toMatchObject({ code: 'no_face' });
+  await expect(analyzePhoto(blob, { catalog: null, adapter: adapter([]) })).rejects.toMatchObject({
+    code: 'no_face',
+  });
 });
 
 test('a 60 px face → face_too_small', () => {
@@ -78,16 +78,16 @@ test('a 40° yaw → face_turned', () => {
 
 test('model load failure → models', async () => {
   const a = adapter(fx.faces, { loadModels: vi.fn().mockRejectedValue(new Error('offline')) });
-  await expect(analyzePhoto(blob, { catalog: null, base: 'a', adapter: a })).rejects.toMatchObject({
+  await expect(analyzePhoto(blob, { catalog: null, adapter: a })).rejects.toMatchObject({
     code: 'models',
   });
 });
 
 test('decode failure → decode', async () => {
   vi.mocked(decodePhoto).mockRejectedValueOnce(new DecodeError('bad'));
-  await expect(
-    analyzePhoto(blob, { catalog: null, base: 'a', adapter: adapter() }),
-  ).rejects.toMatchObject({ code: 'decode' });
+  await expect(analyzePhoto(blob, { catalog: null, adapter: adapter() })).rejects.toMatchObject({
+    code: 'decode',
+  });
 });
 
 test('messageFor maps every code to a user-facing string', () => {

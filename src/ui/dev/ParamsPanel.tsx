@@ -1,4 +1,3 @@
-import { FACE_SHAPE_KEYS } from '../../avatar/applyParams';
 import { EYE_COLORS } from '../../avatar/eyeColors';
 import { defaultParams, type AvatarParams } from '../../catalog/params';
 import { useAppStore } from '../../store/useAppStore';
@@ -17,7 +16,7 @@ export function ParamsPanel() {
   const catalog = useAppStore((s) => s.catalog);
   const setParams = useAppStore((s) => s.setParams);
 
-  const hairOptions = (catalog?.hair ?? []).filter((h) => h.base === params.base);
+  const hairOptions = catalog?.hair ?? [];
 
   return (
     <aside style={panelStyle} data-testid="params-panel">
@@ -37,14 +36,6 @@ export function ParamsPanel() {
           type="color"
           value={params.hairColor}
           onChange={(e) => setParams({ hairColor: e.target.value })}
-        />
-      </Row>
-      <Row label="Lip tint">
-        <input
-          data-testid="param-lipTint"
-          type="color"
-          value={params.lipTint}
-          onChange={(e) => setParams({ lipTint: e.target.value })}
         />
       </Row>
       <Row label="Eyes">
@@ -104,22 +95,6 @@ export function ParamsPanel() {
           ))}
         </select>
       </Row>
-
-      {FACE_SHAPE_KEYS.map((key) => (
-        <Row key={key} label={key}>
-          <input
-            data-testid={`param-faceShape-${key}`}
-            type="range"
-            min={-1}
-            max={1}
-            step={0.05}
-            value={params.faceShape[key]}
-            onChange={(e) =>
-              setParams({ faceShape: { ...params.faceShape, [key]: Number(e.target.value) } })
-            }
-          />
-        </Row>
-      ))}
 
       <button type="button" onClick={() => setParams(defaultParams)} style={{ marginTop: 8 }}>
         Reset
