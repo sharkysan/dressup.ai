@@ -46,3 +46,8 @@ public/mediapipe/
 # lineup test material (consented photos and their sheets never leave the machine)
 lineup-out/
 e2e/fixtures/photos/
+
+# project-local Blender toolchain: Blender, add-ons and asset packs (npm run blender:setup)
+.blender/
+# bytecode Blender's Python writes next to tools/blender/*.py
+__pycache__/

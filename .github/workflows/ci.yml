@@ -7,7 +7,7 @@ on:
 jobs:
   checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -17,6 +17,24 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      # The installed toolchain only: setup.sh skips every step whose output is present, so its
+      # downloads (~700 MB) need not be cached as well.
+      - name: Cache the Blender toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            .blender
+            !.blender/downloads
+          key: blender-${{ runner.os }}-${{ hashFiles('tools/blender/versions.env') }}
+
+      - name: Install Blender's runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxi6 libxxf86vm1 libxfixes3 libxrender1 libgl1 libxkbcommon0 libsm6
+
+      - name: Set up the Blender toolchain
+        run: npm run blender:setup
 
       - name: Fetch dev sample VRMs and build assets
         run: npm run assets:dev
