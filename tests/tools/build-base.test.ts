@@ -3,7 +3,7 @@
 // Integration test of the built base (npm run assets:base); skipped until the build has run.
 import fs from 'node:fs';
 import { Matrix4, Quaternion, Vector3 } from 'three';
-import { BODY_MESH } from '../../src/avatar/baseContract';
+import { BODY_MESH, EXPRESSION_TARGETS, MATERIALS } from '../../src/avatar/baseContract';
 import { validateBase } from '../../tools/base/validateBase';
 import { readAccessor } from '../../tools/glb/accessors';
 import { readGlb } from '../../tools/glb/glb';
@@ -11,6 +11,14 @@ import { findHumanBoneNode } from '../../tools/glb/humanoid';
 import type { GlbDoc } from '../../tools/glb/types';
 
 const BUILT = 'public/assets/base/base.vrm';
+// The meshes that carry the expression morph targets: everything but the eyeballs.
+const EXPRESSION_MESHES = [
+  BODY_MESH,
+  MATERIALS.brows,
+  MATERIALS.lashes,
+  MATERIALS.teeth,
+  MATERIALS.tongue,
+];
 
 const mesh = (doc: GlbDoc, name: string) => {
   const found = doc.json.meshes.find((m: any) => m.name === name);
@@ -43,8 +51,42 @@ describe.skipIf(!fs.existsSync(BUILT))('built base (public/assets/base/base.vrm)
   const doc = fs.existsSync(BUILT) ? readGlb(new Uint8Array(fs.readFileSync(BUILT))) : null!;
 
   test('matches the naming contract', () => {
-    // Tasks 4 and 5 turn the expressions and bodyTargets checks on.
-    expect(validateBase(doc, { expressions: false, bodyTargets: false })).toEqual([]);
+    // Task 5 turns the bodyTargets check on.
+    expect(validateBase(doc, { bodyTargets: false })).toEqual([]);
+  });
+
+  test('each expression preset binds its key at weight 1 on every mesh but the eyes', () => {
+    const preset = doc.json.extensions.VRMC_vrm.expressions.preset;
+    for (const [name, key] of Object.entries(EXPRESSION_TARGETS)) {
+      const bound = (preset[name]?.morphTargetBinds ?? []).map((b: any) => {
+        const m = doc.json.meshes[doc.json.nodes[b.node].mesh];
+        return `${m.name}:${m.extras?.targetNames?.[b.index]}@${b.weight}`;
+      });
+      expect(bound.sort(), name).toEqual(EXPRESSION_MESHES.map((m) => `${m}:${key}@1`).sort());
+    }
+  });
+
+  test("blinkLeft closes the character's left eye (+X) and leaves the right one", () => {
+    const body = mesh(doc, BODY_MESH);
+    const target = (body.extras?.targetNames ?? []).indexOf(EXPRESSION_TARGETS.blinkLeft);
+    expect(target).toBeGreaterThanOrEqual(0);
+    let moved = 0;
+    let movedX = 0;
+    let rightEye = 0;
+    for (const p of body.primitives) {
+      const xyz = readAccessor(doc, p.attributes.POSITION);
+      const delta = readAccessor(doc, p.targets[target].POSITION);
+      for (let i = 0; i < delta.length; i += 3) {
+        const d = Math.hypot(delta[i]!, delta[i + 1]!, delta[i + 2]!);
+        moved += d;
+        movedX += d * xyz[i]!;
+        if (xyz[i]! < -0.02) rightEye = Math.max(rightEye, d);
+      }
+    }
+    // The left eye's centre is at x ≈ +2.8 cm. faceunits01's eyeBlinkLeft also drags the skin just
+    // right of the nose bridge a little, but nothing around the right eye moves more than ~1 mm.
+    expect(movedX / moved).toBeGreaterThan(0.01);
+    expect(rightEye).toBeLessThan(0.002);
   });
 
   test('the body is between 1.5 and 1.85 m tall', () => {

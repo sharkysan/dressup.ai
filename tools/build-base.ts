@@ -2,7 +2,8 @@
  * build-base: the realistic MakeHuman base (spec §4, §7), built headlessly in Blender, → <out>/base.vrm.
  *   tsx tools/build-base.ts --out public/assets/base
  * Steps: write the naming contract → tools/blender/build_base.py (MPFB human, rig, proxies, T-pose,
- * VRM 1.0 export) → WebP textures → prune → validate against the contract → size budget → atomic write.
+ * expressions, VRM 1.0 export) → WebP textures → prune → validate against the contract → size budget →
+ * atomic write.
  * Needs the Blender toolchain (npm run blender:setup).
  */
 import { spawnSync } from 'node:child_process';
@@ -43,8 +44,8 @@ export async function buildBase(opts: {
     // MPFB's PNG textures alone are over the budget; WebP brings them well under it.
     if (!(await convertImagesToWebp(doc))) throw new Error('WebP conversion needs `sharp`');
     doc = pruneUnused(doc);
-    // Tasks 4 and 5 add the expressions and body morph targets these checks look for.
-    const problems = validateBase(doc, { expressions: false, bodyTargets: false });
+    // Task 5 adds the body morph targets this check looks for.
+    const problems = validateBase(doc, { bodyTargets: false });
     if (problems.length > 0) {
       throw new Error(`base.vrm breaks the naming contract:\n  ${problems.join('\n  ')}`);
     }

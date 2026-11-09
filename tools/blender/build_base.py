@@ -3,7 +3,8 @@
     tools/blender/run.sh tools/blender/build_base.py -- --contract <contract.json> --work <dir>
 
 Writes <work>/base.vrm: a MakeHuman (MPFB) female in a T-pose, game_engine rig, GAMEENGINE (plain PBR)
-materials, eyes, brows, lashes, teeth and tongue, every object and material named per the contract that
+materials, eyes, brows, lashes, teeth and tongue, the VRM expressions happy, relaxed, surprised and
+blinkLeft baked from faceunits01 (targets.py), every object and material named per the contract that
 tools/build-base.ts writes from src/avatar/baseContract.ts. Exits 1 if any step or the export fails.
 """
 
@@ -19,6 +20,7 @@ import bpy
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from mpfb import mpfb_service, require_toolchain  # noqa: E402
+from targets import EXPRESSION_RECIPES, mix, parse_target, to_blender  # noqa: E402
 
 # Young adult female, the deepest of MPFB's light skins (MPFB ships only light and dark young female
 # skins; Task 6 neutralises the texture so the runtime tint sets the tone).
@@ -95,6 +97,10 @@ GAME_ENGINE_TO_VRM = {
 
 # Basemesh vertex groups that hold MakeHuman's fitting helpers, not the body.
 HELPER_GROUPS = ("HelperGeometry", "JointCubes")
+
+# Proxies (contract material keys) that take the expression shape keys from the basemesh. Not the eyes:
+# the eyeballs stay put while the lids, brows and mouth move around them.
+EXPRESSION_PROXIES = ("brows", "lashes", "teeth", "tongue")
 
 VRM_NAME = "Kiss base"
 VRM_AUTHOR = "Kiss"
@@ -193,6 +199,73 @@ def bake_pose_as_rest(rig, meshes):
         RigService.ensure_armature_modifier(obj, rig)
 
 
+def vertex_coords(mesh):
+    """A mesh's vertex coordinates, flat [x0, y0, z0, x1, ...]."""
+    coords = [0.0] * (3 * len(mesh.vertices))
+    mesh.vertices.foreach_get("co", coords)
+    return coords
+
+
+def add_shape_key(obj, name, coords):
+    """Adds shape key `name` (and the Basis first, if obj has none) with flat coordinates `coords`."""
+    if obj.data.shape_keys is None:
+        obj.shape_key_add(name="Basis", from_mix=False)
+    obj.shape_key_add(name=name, from_mix=False).data.foreach_set("co", coords)
+
+
+def faceunits():
+    """{unit: {vertex index: MakeHuman offset}} for every faceunits01 unit the recipes use."""
+    units_dir = Path(os.environ["FACEUNITS_DIR"])
+    names = {unit for recipe in EXPRESSION_RECIPES.values() for unit in recipe}
+    return {name: parse_target((units_dir / f"{name}.target").read_text()) for name in names}
+
+
+def capture_shape_keys(source, obj, names):
+    """Gives obj each of source's shape keys `names`, captured through a Surface Deform bound to source
+    at rest: proxies don't follow basemesh shape keys on their own."""
+    activate(obj)
+    capture = obj.modifiers.new("Capture expressions", "SURFACE_DEFORM")
+    capture.target = source
+    bpy.ops.object.surfacedeform_bind(modifier=capture.name)
+    bpy.context.evaluated_depsgraph_get()  # the bind happens on evaluation
+    if not capture.is_bound:
+        raise RuntimeError(f"{obj.name}: Surface Deform did not bind to {source.name}")
+    keys = source.data.shape_keys.key_blocks
+    for name in names:
+        keys[name].value = 1.0
+        evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+        coords = vertex_coords(evaluated.to_mesh())
+        evaluated.to_mesh_clear()
+        keys[name].value = 0.0
+        add_shape_key(obj, name, coords)
+    obj.modifiers.remove(capture)
+
+
+def bake_expressions(contract, basemesh, proxies):
+    """Adds each EXPRESSION_RECIPES mix of faceunits01 as the contract's shape key on the basemesh, then
+    captures those keys on the EXPRESSION_PROXIES. Runs before delete_helper_vertices: target indices
+    address the full basemesh, helpers included."""
+    key_names = contract["expressionTargets"]
+    if set(key_names) != set(EXPRESSION_RECIPES):
+        raise RuntimeError(
+            f"contract expressions {sorted(key_names)} != recipes {sorted(EXPRESSION_RECIPES)}"
+        )
+    units = faceunits()
+    # MPFB's GeneralObjectProperties scale_factor, which its TargetService scales targets by.
+    scale = basemesh.MPFB_GEN_scale_factor
+    basis = vertex_coords(basemesh.data)
+    for expression, recipe in EXPRESSION_RECIPES.items():
+        coords = list(basis)
+        for index, delta in mix(units, recipe).items():
+            if 3 * index >= len(coords):
+                raise RuntimeError(f"{expression}: target vertex {index} is beyond the basemesh")
+            for axis, offset in enumerate(to_blender(delta, scale)):
+                coords[3 * index + axis] += offset
+        add_shape_key(basemesh, key_names[expression], coords)
+    for key in EXPRESSION_PROXIES:
+        capture_shape_keys(basemesh, proxies[key], key_names.values())
+
+
 def delete_helper_vertices(basemesh):
     """Deletes the helper and joint-cube vertices with bmesh, which keeps any shape-key layers."""
     groups = {basemesh.vertex_groups[name].index for name in HELPER_GROUPS}
@@ -272,6 +345,11 @@ def set_alpha_modes(contract, basemesh, proxies):
             make_opaque(material)
 
 
+def snake_case(name):
+    """A VRM camelCase name (leftUpperArm, blinkLeft) as the VRM add-on's property name (left_upper_arm)."""
+    return "".join("_" + c.lower() if c.isupper() else c for c in name)
+
+
 def setup_vrm(rig):
     """VRM 1.0 humanoid (rest pose = the baked T-pose) and meta on the rig."""
     ext = rig.data.vrm_addon_extension
@@ -281,13 +359,26 @@ def setup_vrm(rig):
     for bone_name, vrm_bone in GAME_ENGINE_TO_VRM.items():
         if bone_name not in bones:
             raise RuntimeError(f"rig {RIG} has no bone {bone_name} (for VRM {vrm_bone})")
-        prop = "".join("_" + c.lower() if c.isupper() else c for c in vrm_bone)
-        getattr(human_bones, prop).node.bone_name = bone_name
+        getattr(human_bones, snake_case(vrm_bone)).node.bone_name = bone_name
     ext.vrm1.humanoid.pose = "restPositionPose"
     meta = ext.vrm1.meta
     meta.vrm_name = VRM_NAME
     meta.authors.clear()
     meta.authors.add().value = VRM_AUTHOR
+
+
+def bind_expressions(contract, rig, meshes):
+    """Binds each contract expression's VRM preset to its shape key, at weight 1, on every mesh that has
+    the key. Runs after setup_vrm sets the spec version, which clears expression binds."""
+    presets = rig.data.vrm_addon_extension.vrm1.expressions.preset
+    for expression, key_name in contract["expressionTargets"].items():
+        binds = getattr(presets, snake_case(expression)).morph_target_binds
+        for obj in meshes:
+            if obj.data.shape_keys and key_name in obj.data.shape_keys.key_blocks:
+                bind = binds.add()
+                bind.node.bpy_object = obj
+                bind.index = key_name
+                bind.weight = 1.0
 
 
 def export_vrm(rig, path):
@@ -314,12 +405,14 @@ def main():
 
     apply_t_pose(rig)
     bake_pose_as_rest(rig, meshes)
+    bake_expressions(contract, basemesh, proxies)
     removed = delete_helper_vertices(basemesh)
     print(f"build_base: removed {removed} helper vertices")
 
     rename(contract, basemesh, proxies)
     set_alpha_modes(contract, basemesh, proxies)
     setup_vrm(rig)
+    bind_expressions(contract, rig, meshes)
     export_vrm(rig, args.work / "base.vrm")
     print(f"build_base: wrote {args.work / 'base.vrm'}")
 

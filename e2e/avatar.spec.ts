@@ -48,8 +48,7 @@ test('an unknown hair id leaves the avatar ready and bald', async ({ page }) => 
   expect(warnings.some((w) => w.includes('does_not_exist'))).toBe(true);
 });
 
-// Parked until Task 4 adds the expression morph targets to the realistic base.
-test.fixme('expressions change the face', async ({ page }) => {
+test('expressions change the face', async ({ page }) => {
   const neutral = await shot(page);
   await setParams(page, { expression: 'surprised' });
   const surprised = await shot(page);

@@ -14,7 +14,7 @@
     "format": "prettier --write .",
     "e2e": "playwright test",
     "lineup": "tsx tools/lineup.ts",
-    "ci": "npm run lint && npm run typecheck && npm test && npm run build && npm run e2e",
+    "ci": "npm run lint && npm run typecheck && npm test && npm run test:blender && npm run build && npm run e2e",
     "assets:fetch-dev": "./tools/fetch-dev-samples.sh",
     "assets:synth": "tsx tools/synth-variants.ts --src assets/source/base-a/neutral.vrm --out assets/source/base-a/morphs",
     "assets:base": "tsx tools/build-base.ts --out public/assets/base",
@@ -25,7 +25,8 @@
     "assets:models": "./tools/fetch-models.sh && tsx tools/copy-mediapipe-wasm.ts",
     "calibrate:canonical": "tsx tools/calibrate-canonical.ts",
     "blender:setup": "./tools/blender/setup.sh",
-    "blender:smoke": "./tools/blender/run.sh tools/blender/smoke.py"
+    "blender:smoke": "./tools/blender/run.sh tools/blender/smoke.py",
+    "test:blender": "./tools/blender/run.sh tools/blender/run_tests.py"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.2.2",
