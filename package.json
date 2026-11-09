@@ -17,9 +17,10 @@
     "assets:fetch-dev": "./tools/fetch-dev-samples.sh",
     "assets:synth": "tsx tools/synth-variants.ts --src assets/source/base-a/neutral.vrm --out assets/source/base-a/morphs",
     "assets:base": "tsx tools/build-base.ts --src assets/source/base-a --out public/assets/avatars/base-a.vrm --webp",
-    "assets": "npm run assets:base && npm run assets:hair",
+    "assets": "npm run assets:base && npm run assets:hair && npm run assets:catalog",
     "assets:dev": "npm run assets:fetch-dev && npm run assets:synth && npm run assets",
-    "assets:hair": "tsx tools/build-hair.ts --src assets/source/hair --out public/assets/hair --webp"
+    "assets:hair": "tsx tools/build-hair.ts --src assets/source/hair --out public/assets/hair --webp",
+    "assets:catalog": "tsx tools/build-catalog.ts --source assets/source --public public/assets --out public/assets/catalog.json"
   },
   "dependencies": {
     "@pixiv/three-vrm": "^3.5.5",
