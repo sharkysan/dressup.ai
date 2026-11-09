@@ -11,18 +11,32 @@ mkdir -p "$DOWNLOADS" "$BLENDER_USER_RESOURCES"
 
 sha256_of() { shasum -a 256 "$1" | cut -d ' ' -f 1; }
 
-# fetch <url> <sha256, empty while unpinned>: downloads into .blender/downloads/ (once) and verifies it.
-# Sets FETCHED to the file's path and FETCHED_SHA256 to its digest.
+# curl_part <url> <file> <retries> <min bytes/s> <seconds>: downloads <url> into <file>, resuming a partial
+# <file>; retries errors and transfers slower than <min bytes/s> for <seconds>.
+curl_part() {
+  local progress
+  # A progress bar only on a terminal: in CI logs it would print a line per update.
+  if [ -t 2 ]; then progress=--progress-bar; else progress=-sS; fi
+  curl --retry "$3" --retry-delay 5 --retry-all-errors --connect-timeout 30 --speed-limit "$4" \
+    --speed-time "$5" -fL -C - "$progress" -o "$2" "$1"
+}
+
+# fetch <url> <sha256, empty while unpinned> [mirror url]: downloads into .blender/downloads/ (once) and
+# verifies it. Sets FETCHED to the file's path and FETCHED_SHA256 to its digest.
+# The asset hosts are slow and flaky: partial files resume, errors and stalls (<1 kB/s for 2 min) retry.
+# With a mirror (the same file, so the same sha256 pin), a <url> that cannot hold 512 kB/s for 30 s gives
+# way to the mirror, which resumes the partial file.
 fetch() {
-  local url=$1 expected=$2 dest progress
+  local url=$1 expected=$2 mirror=${3:-} dest
   dest="$DOWNLOADS/$(basename "$url")"
   if [ ! -s "$dest" ]; then
     echo "downloading $url"
-    # The asset mirror is slow and flaky: resume partial files, retry stalls (<1 kB/s for 2 min) and errors.
-    # A progress bar only on a terminal: in CI logs it would print a line per update.
-    if [ -t 2 ]; then progress=--progress-bar; else progress=-sS; fi
-    curl --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30 --speed-limit 1024 \
-      --speed-time 120 -fL -C - "$progress" -o "$dest.part" "$url"
+    if [ -z "$mirror" ]; then
+      curl_part "$url" "$dest.part" 5 1024 120
+    elif ! curl_part "$url" "$dest.part" 1 524288 30; then
+      echo "too slow or failing: $url; downloading the same file from $mirror"
+      curl_part "$mirror" "$dest.part" 5 1024 120
+    fi
     mv "$dest.part" "$dest"
   fi
   FETCHED=$dest
@@ -124,23 +138,38 @@ if [ "$mpfb_data" != "$MPFB_DATA" ]; then
   exit 1
 fi
 
-# install_pack <name> <url> <sha256> <dest>: unzips once; a stamp records the sha256 of the zip installed.
+# install_pack <name> <dest> <probe> <tree|flat> <url> <sha256> [mirror url]: unzips the pack into <dest>,
+# keeping the zip's directories (tree) or dropping them (flat: <dest> is emptied first, then holds every file
+# of the zip directly). Skipped while <dest>'s stamp records the pinned zip's sha256 and <dest>/<probe> exists.
 install_pack() {
-  local name=$1 url=$2 sha=$3 dest=$4 stamp
+  local name=$1 dest=$2 probe=$2/$3 layout=$4 sha=$6 stamp
   stamp="$dest/.$name.sha256"
-  if [ -f "$stamp" ] && { [ -z "$sha" ] || [ "$(cat "$stamp")" = "$sha" ]; }; then
+  if [ -f "$stamp" ] && [ -e "$probe" ] && { [ -z "$sha" ] || [ "$(cat "$stamp")" = "$sha" ]; }; then
     echo "present: $name ($(cat "$stamp"))"
     return
   fi
-  fetch "$url" "$sha"
-  mkdir -p "$dest"
-  unzip -qo "$FETCHED" -d "$dest"
+  fetch "$5" "$sha" "${7:-}"
+  if [ "$layout" = flat ]; then
+    rm -rf "$dest"
+    mkdir -p "$dest"
+    unzip -qjo "$FETCHED" -d "$dest"
+  else
+    mkdir -p "$dest"
+    unzip -qo "$FETCHED" -d "$dest"
+  fi
+  if [ ! -e "$probe" ]; then
+    echo "$name: $(basename "$FETCHED") did not provide $probe" >&2
+    exit 1
+  fi
   echo "$FETCHED_SHA256" > "$stamp"
   echo "installed: $name into $dest"
 }
 
 # The system-assets zip already has the user-data layout (packs/, skins/, eyes/, …).
-install_pack makehuman_system_assets "$SYSTEM_ASSETS_URL" "$SYSTEM_ASSETS_SHA256" "$MPFB_DATA"
-install_pack faceunits01 "$FACEUNITS_URL" "$FACEUNITS_SHA256" "$BLENDER_HOME/packs/faceunits01"
+install_pack makehuman_system_assets "$MPFB_DATA" skins tree \
+  "$SYSTEM_ASSETS_URL" "$SYSTEM_ASSETS_SHA256" "${SYSTEM_ASSETS_MIRROR_URL:-}"
+# faceunits01 zips its units as targets/faceunits/<unit>.target (plus packs/faceunits01.json, no clashing
+# names); unzipped flat into $FACEUNITS_DIR (.blender/packs/faceunits01) they are $FACEUNITS_DIR/<unit>.target.
+install_pack faceunits01 "$FACEUNITS_DIR" eyeBlinkLeft.target flat "$FACEUNITS_URL" "$FACEUNITS_SHA256"
 
 "$HERE/run.sh" "$HERE/smoke.py"

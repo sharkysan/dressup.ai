@@ -17,5 +17,5 @@ export BLENDER
 export BLENDER_USER_RESOURCES="${BLENDER_USER_RESOURCES:-$BLENDER_HOME/user}"
 # MPFB's user-data dir: <extension_path_user of the mpfb package>/data (setup.sh checks this against MPFB).
 export MPFB_DATA="$BLENDER_USER_RESOURCES/extensions/.user/$BLENDER_EXT_REPO/mpfb/data"
-# faceunits01 unzips to targets/faceunits/<unit>.target; this is the dir holding the .target files.
-export FACEUNITS_DIR="$BLENDER_HOME/packs/faceunits01/targets/faceunits"
+# faceunits01, unzipped flat by setup.sh: this dir directly holds the <unit>.target files.
+export FACEUNITS_DIR="$BLENDER_HOME/packs/faceunits01"
