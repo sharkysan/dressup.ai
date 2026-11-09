@@ -2,6 +2,7 @@
 import {
   ALL_BODY_TARGETS,
   EXPRESSION_TARGETS,
+  MASKED_MATERIALS,
   MATERIALS,
   REQUIRED_HUMAN_BONES,
 } from '../../../src/avatar/baseContract';
@@ -38,7 +39,7 @@ function validBaseDoc(): GlbDoc {
     ],
     materials: Object.values(MATERIALS).map((name) => ({
       name,
-      ...(name === 'Brows' || name === 'Lashes' ? { alphaMode: 'MASK' } : {}),
+      ...(MASKED_MATERIALS.includes(name) ? { alphaMode: 'MASK' } : {}),
     })),
   };
   return { json: json as unknown as GlbDoc['json'], bin: new Uint8Array(0) };

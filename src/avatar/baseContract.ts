@@ -27,8 +27,11 @@ export const MATERIALS = {
   tongue: 'Tongue',
 } as const;
 
-/** Materials exported with alphaMode MASK. */
-export const MASKED_MATERIALS = ['Brows', 'Lashes'];
+/**
+ * Materials exported with alphaMode MASK. Eyes too: MakeHuman's eye textures map the cornea to a fully
+ * transparent disc, so an opaque Eyes material draws a white cornea over the iris.
+ */
+export const MASKED_MATERIALS = ['Eyes', 'Brows', 'Lashes'];
 
 /** Region id painted into the regions map. 0 = never hidden (head, hands). */
 export const REGION_CODES: Record<Region, number> = {

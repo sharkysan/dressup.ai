@@ -1,63 +1,74 @@
 // @vitest-environment node
-import { execFileSync } from 'node:child_process';
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// Integration test of the built base (npm run assets:base); skipped until the build has run.
 import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
+import { Matrix4, Quaternion, Vector3 } from 'three';
+import { BODY_MESH } from '../../src/avatar/baseContract';
+import { validateBase } from '../../tools/base/validateBase';
+import { readAccessor } from '../../tools/glb/accessors';
 import { readGlb } from '../../tools/glb/glb';
-import { getImage } from '../../tools/glb/textures';
+import { findHumanBoneNode } from '../../tools/glb/humanoid';
+import type { GlbDoc } from '../../tools/glb/types';
 
-const NEUTRAL = 'assets/source/base-a/neutral.vrm';
-const run = (args: string[]) => execFileSync('npx', ['tsx', ...args], { stdio: 'pipe' });
+const BUILT = 'public/assets/base/base.vrm';
 
-test('builds a base with 16 face morphs, no hair, textures ≤1024, expressions intact', () => {
-  if (!fs.existsSync(NEUTRAL)) return; // dev samples not fetched
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kiss-build-'));
-  run(['tools/synth-variants.ts', '--src', NEUTRAL, '--out', path.join(tmp, 'morphs')]);
-  const out = path.join(tmp, 'base.vrm');
-  run([
-    'tools/build-base.ts',
-    '--src',
-    'assets/source/base-a',
-    '--morphs',
-    path.join(tmp, 'morphs'),
-    '--out',
-    out,
-  ]);
+const mesh = (doc: GlbDoc, name: string) => {
+  const found = doc.json.meshes.find((m: any) => m.name === name);
+  if (!found) throw new Error(`mesh ${name} is missing`);
+  return found;
+};
 
-  const doc = readGlb(new Uint8Array(fs.readFileSync(out)));
-  const face = doc.json.meshes.find((m: { name: string }) => m.name === 'Face');
-  const ours = face.extras.targetNames.filter((n: string) => /_(min|max)$/.test(n));
-  expect(ours).toHaveLength(16);
-  expect(doc.json.nodes.find((n: { name: string }) => n.name === 'Hair').mesh).toBeUndefined();
-  expect(doc.json.meshes.find((m: { name: string }) => m.name === 'Hair')).toBeUndefined();
-  for (const img of doc.json.images) {
-    const png = getImage(doc, img.name);
-    // PNG IHDR: width/height at bytes 16..24
-    const view = new DataView(png.buffer, png.byteOffset);
-    expect(Math.max(view.getUint32(16), view.getUint32(20))).toBeLessThanOrEqual(1024);
+function localMatrix(node: any): Matrix4 {
+  if (node.matrix) return new Matrix4().fromArray(node.matrix);
+  return new Matrix4().compose(
+    new Vector3(...(node.translation ?? [0, 0, 0])),
+    new Quaternion(...(node.rotation ?? [0, 0, 0, 1])),
+    new Vector3(...(node.scale ?? [1, 1, 1])),
+  );
+}
+
+function worldPosition(doc: GlbDoc, index: number): Vector3 {
+  const parent = new Map<number, number>();
+  doc.json.nodes.forEach((n: any, i: number) => {
+    for (const c of n.children ?? []) parent.set(c, i);
+  });
+  const world = new Matrix4();
+  for (let i: number | undefined = index; i !== undefined; i = parent.get(i)) {
+    world.premultiply(localMatrix(doc.json.nodes[i]));
   }
-  expect(doc.json.extensions.VRMC_vrm.expressions.preset.happy.morphTargetBinds[0].index).toBe(3);
-  expect(doc.json.extensions.VRMC_springBone).toBeUndefined(); // no physics in v1 (spec §7)
-  expect(fs.statSync(out).size).toBeLessThan(6 * 1024 * 1024); // PNG build; WebP build is smaller
-}, 120_000);
+  return new Vector3().setFromMatrixPosition(world);
+}
 
-test('fails loudly on a variant with different topology', () => {
-  if (!fs.existsSync(NEUTRAL)) return;
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kiss-build-bad-'));
-  fs.mkdirSync(path.join(tmp, 'morphs'));
-  // Seed-san has different topology from the Twist sample.
-  const other = 'assets/source/hair/hair_seed_01/source.vrm';
-  if (!fs.existsSync(other)) return;
-  fs.copyFileSync(other, path.join(tmp, 'morphs', 'faceWidth.max.vrm'));
-  expect(() =>
-    run([
-      'tools/build-base.ts',
-      '--src',
-      'assets/source/base-a',
-      '--morphs',
-      path.join(tmp, 'morphs'),
-      '--out',
-      path.join(tmp, 'x.vrm'),
-    ]),
-  ).toThrow();
-}, 120_000);
+describe.skipIf(!fs.existsSync(BUILT))('built base (public/assets/base/base.vrm)', () => {
+  const doc = fs.existsSync(BUILT) ? readGlb(new Uint8Array(fs.readFileSync(BUILT))) : null!;
+
+  test('matches the naming contract', () => {
+    // Tasks 4 and 5 turn the expressions and bodyTargets checks on.
+    expect(validateBase(doc, { expressions: false, bodyTargets: false })).toEqual([]);
+  });
+
+  test('the body is between 1.5 and 1.85 m tall', () => {
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const p of mesh(doc, BODY_MESH).primitives) {
+      const position = doc.json.accessors[p.attributes.POSITION];
+      minY = Math.min(minY, position.min[1]);
+      maxY = Math.max(maxY, position.max[1]);
+    }
+    expect(maxY - minY).toBeGreaterThan(1.5);
+    expect(maxY - minY).toBeLessThan(1.85);
+  });
+
+  test('faces +Z: the eyes are in front of the head bone', () => {
+    let sum = 0;
+    let count = 0;
+    for (const p of mesh(doc, 'Eyes').primitives) {
+      const xyz = readAccessor(doc, p.attributes.POSITION);
+      for (let i = 2; i < xyz.length; i += 3) sum += xyz[i]!;
+      count += xyz.length / 3;
+    }
+    const head = findHumanBoneNode(doc.json, 'head');
+    expect(head).toBeGreaterThanOrEqual(0);
+    expect(sum / count).toBeGreaterThan(worldPosition(doc, head).z);
+  });
+});

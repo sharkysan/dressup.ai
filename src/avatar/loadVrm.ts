@@ -1,9 +1,6 @@
 import { VRMLoaderPlugin, VRMUtils, type VRM } from '@pixiv/three-vrm';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-/** Development placeholder (spec §7). Fetched by tools/fetch-placeholder-vrm.sh, replaced in M1. */
-export const BASE_A_URL = '/assets/avatars/base-a.vrm';
-
 /**
  * Loads a VRM 0.x/1.0 file and prepares it for the viewer: unnecessary vertices removed,
  * skeletons combined, scene rotated to face +Z. Rejects with an Error naming the URL.

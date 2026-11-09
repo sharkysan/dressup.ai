@@ -1,109 +1,71 @@
 /**
- * build-base: VRoid VRM → game base avatar (spec §7).
- *   tsx tools/build-base.ts --src assets/source/base-a --out public/assets/avatars/base-a.vrm [--morphs DIR] [--max-texture 1024] [--webp]
- * Steps: removeHair → removePhysics → neutralise skin/iris textures → resize → add face morph targets from
- * <morphs>/<param>.{min,max}.vrm (same topology as neutral.vrm) → optional WebP → prune → write.
+ * build-base: the realistic MakeHuman base (spec §4, §7), built headlessly in Blender, → <out>/base.vrm.
+ *   tsx tools/build-base.ts --out public/assets/base
+ * Steps: write the naming contract → tools/blender/build_base.py (MPFB human, rig, proxies, T-pose,
+ * VRM 1.0 export) → WebP textures → prune → validate against the contract → size budget → atomic write.
+ * Needs the Blender toolchain (npm run blender:setup).
  */
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { contractJson } from '../src/avatar/baseContract';
+import { validateBase } from './base/validateBase';
+import { writeAtomically } from './base/writeAtomically';
 import { cli, human, required } from './cli';
-import { addMorphTargets, type MorphVariant } from './glb/addMorphTargets';
 import { readGlb, writeGlb } from './glb/glb';
 import { pruneUnused } from './glb/prune';
-import { removeHair } from './glb/removeHair';
-import { removePhysics } from './glb/removePhysics';
-import { sparsifyMorphTargets } from './glb/sparsify';
 import { convertImagesToWebp } from './glb/webp';
-import {
-  getImage,
-  neutralizeImage,
-  replaceImage,
-  resizeAllImages,
-  type NeutralizeMode,
-} from './glb/textures';
-import type { GlbDoc } from './glb/types';
-import { isIrisMaterial, isSkinMaterial } from '../src/avatar/vroidNames';
 
-export function neutralizeBaseTextures(doc: GlbDoc): string[] {
-  const done = new Set<string>();
-  const touched: string[] = [];
-  const process = (materialFilter: (name: string) => boolean, mode: NeutralizeMode) => {
-    for (const material of doc.json.materials) {
-      if (!materialFilter(String(material.name ?? ''))) continue;
-      const textureIndex = material.pbrMetallicRoughness?.baseColorTexture?.index;
-      if (textureIndex === undefined) continue;
-      const image = doc.json.images[doc.json.textures[textureIndex].source];
-      if (!image?.name || done.has(image.name)) continue;
-      replaceImage(doc, image.name, neutralizeImage(getImage(doc, image.name), mode));
-      done.add(image.name);
-      touched.push(`${image.name} (${mode})`);
-    }
-  };
-  process(isSkinMaterial, 'divideByMedian');
-  process(isIrisMaterial, 'luminance');
-  if (touched.length === 0) {
-    console.warn(
-      'WARNING: no skin or iris materials matched — runtime tinting will do nothing. Check material names.',
-    );
-  }
-  return touched;
-}
-
-/** `<dir>/<param>.min.vrm` → variant name `<param>_min`; hair is removed so mesh indices match the base. */
-export function loadMorphVariants(dir: string): MorphVariant[] {
-  if (!fs.existsSync(dir)) return [];
-  return fs
-    .readdirSync(dir)
-    .filter((f) => /\.(min|max)\.vrm$/.test(f))
-    .sort()
-    .map((f) => {
-      const m = /^(.+)\.(min|max)\.vrm$/.exec(f)!;
-      return {
-        name: `${m[1]}_${m[2]}`,
-        doc: removeHair(readGlb(new Uint8Array(fs.readFileSync(path.join(dir, f))))),
-      };
-    });
-}
+/** Spec §12 leaves 8 MB for the base and default outfit; the base gets 6 MiB of it. */
+export const BASE_BUDGET_BYTES = 6 * 1024 * 1024;
 
 export async function buildBase(opts: {
-  src: string;
   out: string;
-  morphs?: string;
-  maxTexture: number;
-  webp: boolean;
-}) {
-  const neutralPath = path.join(opts.src, 'neutral.vrm');
-  if (!fs.existsSync(neutralPath)) throw new Error(`missing ${neutralPath}`);
-  let doc = removePhysics(removeHair(readGlb(new Uint8Array(fs.readFileSync(neutralPath)))));
-  const neutralised = neutralizeBaseTextures(doc);
-  resizeAllImages(doc, opts.maxTexture);
-  const variants = loadMorphVariants(opts.morphs ?? path.join(opts.src, 'morphs'));
-  doc = addMorphTargets(doc, variants);
-  doc = sparsifyMorphTargets(doc);
-  if (opts.webp) await convertImagesToWebp(doc);
-  doc = pruneUnused(doc);
-  const bytes = writeGlb(doc);
-  fs.mkdirSync(path.dirname(opts.out), { recursive: true });
-  fs.writeFileSync(opts.out, bytes);
-  return { bytes: bytes.byteLength, neutralised, morphs: variants.map((v) => v.name) };
+  budgetBytes?: number;
+}): Promise<{ bytes: number; problems: string[] }> {
+  const budget = opts.budgetBytes ?? BASE_BUDGET_BYTES;
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'kiss-base-'));
+  try {
+    const contract = path.join(work, 'contract.json');
+    fs.writeFileSync(contract, JSON.stringify(contractJson(), null, 2));
+    const blender = spawnSync(
+      'tools/blender/run.sh',
+      ['tools/blender/build_base.py', '--', '--contract', contract, '--work', work],
+      { stdio: 'inherit' },
+    );
+    if (blender.error) throw blender.error;
+    if (blender.status !== 0) {
+      throw new Error(`Blender build failed (${blender.signal ?? `exit ${blender.status}`})`);
+    }
+
+    let doc = readGlb(new Uint8Array(fs.readFileSync(path.join(work, 'base.vrm'))));
+    // MPFB's PNG textures alone are over the budget; WebP brings them well under it.
+    if (!(await convertImagesToWebp(doc))) throw new Error('WebP conversion needs `sharp`');
+    doc = pruneUnused(doc);
+    // Tasks 4 and 5 add the expressions and body morph targets these checks look for.
+    const problems = validateBase(doc, { expressions: false, bodyTargets: false });
+    if (problems.length > 0) {
+      throw new Error(`base.vrm breaks the naming contract:\n  ${problems.join('\n  ')}`);
+    }
+
+    const bytes = writeGlb(doc);
+    if (bytes.byteLength > budget) {
+      throw new Error(`base.vrm is ${human(bytes.byteLength)}, over its ${human(budget)} budget`);
+    }
+    fs.mkdirSync(opts.out, { recursive: true });
+    writeAtomically(path.join(opts.out, 'base.vrm'), bytes);
+    return { bytes: bytes.byteLength, problems };
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
 }
 
 if (process.argv[1] && /build-base\.(ts|js)$/.test(process.argv[1])) {
-  const args = cli(['src', 'out', 'morphs', 'max-texture'] as const, ['webp'] as const, {
-    'max-texture': '1024',
-  });
-  buildBase({
-    src: required(args.src, 'src'),
-    out: required(args.out, 'out'),
-    morphs: args.morphs,
-    maxTexture: Number(args['max-texture']),
-    webp: args.webp,
-  })
-    .then((r) => {
-      console.log(`neutralised: ${r.neutralised.join(', ') || 'none'}`);
-      console.log(`morph targets: ${r.morphs.join(', ') || 'none'}`);
-      console.log(`wrote ${args.out} (${human(r.bytes)})`);
-    })
+  const args = cli(['out'] as const, [] as const);
+  const out = required(args.out, 'out');
+  buildBase({ out })
+    .then((r) => console.log(`wrote ${path.join(out, 'base.vrm')} (${human(r.bytes)})`))
     .catch((e) => {
       console.error(e instanceof Error ? e.message : e);
       process.exit(1);

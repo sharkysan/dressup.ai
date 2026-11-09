@@ -3,7 +3,7 @@ import { Canvas, useThree } from '@react-three/fiber';
 import { useEffect } from 'react';
 import { loadCatalog } from '../catalog/catalog';
 import { AvatarModel } from '../avatar/AvatarModel';
-import { BASE_A_URL } from '../avatar/loadVrm';
+import { BASE_URL } from '../avatar/baseContract';
 import { useAppStore } from '../store/useAppStore';
 import { strings } from '../ui/strings';
 import { Framing } from './Framing';
@@ -50,7 +50,7 @@ export function Viewer() {
           maxDistance={5}
         />
         <Framing />
-        <AvatarModel key={BASE_A_URL} url={BASE_A_URL} />
+        <AvatarModel key={BASE_URL} url={BASE_URL} />
         <HandlePublisher />
       </Canvas>
       {status === 'loading' && <p style={overlayStyle}>{strings.loadingAvatar}</p>}

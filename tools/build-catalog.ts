@@ -4,6 +4,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { BASE_URL } from '../src/avatar/baseContract';
 import { catalogSchema, type Catalog } from '../src/catalog/catalog';
 import { cli, required } from './cli';
 
@@ -22,12 +23,13 @@ export function buildCatalog(opts: { source: string; publicDir: string; out: str
     const dir = path.join(opts.source, entry);
     if (!fs.statSync(dir).isDirectory()) continue;
     if (entry.startsWith('base-')) {
+      // The one realistic base (tools/build-base.ts); the sidecar still supplies id and name.
       const meta = readJson<BaseMeta>(path.join(dir, 'meta.json'));
-      const file = `avatars/base-${meta.id}.vrm`;
+      const file = BASE_URL.replace(/^\/assets\//, '');
       if (!fs.existsSync(path.join(opts.publicDir, file))) {
         throw new Error(`base "${meta.id}": built file ${file} is missing — run assets:base`);
       }
-      bases.push({ id: meta.id, name: meta.name, url: `/assets/${file}` });
+      bases.push({ id: meta.id, name: meta.name, url: BASE_URL });
     }
   }
 
