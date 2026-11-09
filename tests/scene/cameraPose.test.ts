@@ -1,4 +1,4 @@
-import { cameraFor } from '../../src/scene/framing';
+import { cameraFor } from '../../src/scene/cameraPose';
 
 test('full framing looks at mid-body from far enough to fit the height', () => {
   const c = cameraFor('full', { headY: 1.42, height: 1.6 });

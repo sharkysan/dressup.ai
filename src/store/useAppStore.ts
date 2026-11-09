@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Catalog } from '../catalog/catalog';
-import type { AvatarMetrics } from '../scene/framing';
+import type { AvatarMetrics } from '../scene/cameraPose';
 import { defaultParams, type AvatarParams, type OutfitItem, type Slot } from '../catalog/params';
 
 export type AvatarStatus = 'loading' | 'ready' | 'error';
