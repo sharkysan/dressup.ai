@@ -1,7 +1,7 @@
 /**
  * build-base: VRoid VRM → game base avatar (spec §7).
  *   tsx tools/build-base.ts --src assets/source/base-a --out public/assets/avatars/base-a.vrm [--morphs DIR] [--max-texture 1024] [--webp]
- * Steps: removeHair → neutralise skin/iris textures → resize → add face morph targets from
+ * Steps: removeHair → removePhysics → neutralise skin/iris textures → resize → add face morph targets from
  * <morphs>/<param>.{min,max}.vrm (same topology as neutral.vrm) → optional WebP → prune → write.
  */
 import fs from 'node:fs';
@@ -11,6 +11,7 @@ import { addMorphTargets, type MorphVariant } from './glb/addMorphTargets';
 import { readGlb, writeGlb } from './glb/glb';
 import { pruneUnused } from './glb/prune';
 import { removeHair } from './glb/removeHair';
+import { removePhysics } from './glb/removePhysics';
 import { sparsifyMorphTargets } from './glb/sparsify';
 import { convertImagesToWebp } from './glb/webp';
 import {
@@ -73,7 +74,7 @@ export async function buildBase(opts: {
 }) {
   const neutralPath = path.join(opts.src, 'neutral.vrm');
   if (!fs.existsSync(neutralPath)) throw new Error(`missing ${neutralPath}`);
-  let doc = removeHair(readGlb(new Uint8Array(fs.readFileSync(neutralPath))));
+  let doc = removePhysics(removeHair(readGlb(new Uint8Array(fs.readFileSync(neutralPath)))));
   const neutralised = neutralizeBaseTextures(doc);
   resizeAllImages(doc, opts.maxTexture);
   const variants = loadMorphVariants(opts.morphs ?? path.join(opts.src, 'morphs'));

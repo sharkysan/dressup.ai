@@ -37,6 +37,7 @@ test('builds a base with 16 face morphs, no hair, textures ≤1024, expressions 
     expect(Math.max(view.getUint32(16), view.getUint32(20))).toBeLessThanOrEqual(1024);
   }
   expect(doc.json.extensions.VRMC_vrm.expressions.preset.happy.morphTargetBinds[0].index).toBe(3);
+  expect(doc.json.extensions.VRMC_springBone).toBeUndefined(); // no physics in v1 (spec §7)
   expect(fs.statSync(out).size).toBeLessThan(6 * 1024 * 1024); // PNG build; WebP build is smaller
 }, 120_000);
 
