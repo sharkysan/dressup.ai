@@ -92,15 +92,20 @@ export function AvatarModel({ url }: { url: string }) {
 }
 
 /**
- * Builds the skin canvas from the Skin material's loaded map and applies `params`; the map the canvas
- * replaces is freed.
+ * Builds the skin canvas from the Skin material's loaded map, and its roughness map from the material's
+ * roughness and the base layer, and applies `params`; the map the canvas replaces is freed.
  */
 function prepare(vrm: VRM, meta: BaseMeta, baseLayer: ImageData, params: AvatarParams): Avatar {
-  const original = standardMaterial(vrm.scene, MATERIALS.skin)?.map;
+  const material = standardMaterial(vrm.scene, MATERIALS.skin);
+  const original = material?.map;
   // GLTFLoader decodes to an ImageBitmap, or an HTMLImageElement where bitmaps are unsupported.
   const image = original?.image as ImageBitmap | HTMLImageElement | undefined;
-  if (!original || !image) throw new Error(`the base has no ${MATERIALS.skin} material with a map`);
-  const ctx = { skin: new SkinTexture(image, baseLayer), eyes: new EyeTextures(), meta };
+  if (!material || !original || !image) {
+    throw new Error(`the base has no ${MATERIALS.skin} material with a map`);
+  }
+  // The exported roughness, read before applyParams hands it to the roughness map.
+  const skin = new SkinTexture(image, baseLayer, material.roughness);
+  const ctx = { skin, eyes: new EyeTextures(), meta };
   applyParams(vrm, params, ctx);
   original.dispose();
   if ('close' in image) image.close();

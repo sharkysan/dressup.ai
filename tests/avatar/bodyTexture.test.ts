@@ -1,4 +1,4 @@
-import { composeBodyAlbedo } from '../../src/avatar/bodyTexture';
+import { bodyRoughness, composeBodyAlbedo } from '../../src/avatar/bodyTexture';
 
 /** A 2×1 RGBA image (no canvas needed: composeBodyAlbedo only reads data, width and height). */
 const image = (a: number[], b: number[]) => ({
@@ -56,4 +56,20 @@ test('writes into a given output and leaves the inputs untouched', () => {
 test('rejects images of different sizes', () => {
   const wide = { data: new Uint8ClampedArray(16), width: 4, height: 1 };
   expect(() => composeBodyAlbedo(skin, wide, '#ffffff')).toThrow(/size/);
+});
+
+test('body roughness: the skin value where the base layer is clear, the garment value where it is opaque, by alpha between', () => {
+  const layer = {
+    data: new Uint8ClampedArray([0, 0, 0, 0, 47, 47, 51, 255, 233, 230, 225, 128]),
+    width: 3,
+    height: 1,
+  };
+  // RG pairs, the same roughness × 255 in both (G is the channel glTF and three.js read).
+  expect([...bodyRoughness(layer, 0.5, 0.9)]).toEqual([128, 128, 230, 230, 179, 179]);
+});
+
+test('body roughness ignores the base-layer colour: only its alpha counts', () => {
+  const a = { data: new Uint8ClampedArray([0, 0, 0, 200]), width: 1, height: 1 };
+  const b = { data: new Uint8ClampedArray([255, 10, 99, 200]), width: 1, height: 1 };
+  expect(bodyRoughness(a, 0.4, 0.9)).toEqual(bodyRoughness(b, 0.4, 0.9));
 });

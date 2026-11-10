@@ -31,14 +31,20 @@ export type ApplyContext = { skin: SkinTexture; eyes: EyeTextures; meta: BaseMet
 
 /**
  * Applies the parts of `AvatarParams` that live on the base avatar (spec §7): the skin tint under the
- * base layer, the eye texture, the hair colour on brows and lashes, the body shape, height and
- * grounding, and the expression. Hairstyle loading and tinting are HairModel's job.
+ * base layer (with the base layer's matte roughness), the eye texture, the hair colour on brows and
+ * lashes, the body shape, height and grounding, and the expression. Hairstyle loading and tinting are
+ * HairModel's job.
  * Idempotent: every value is set absolutely, never accumulated.
  */
 export function applyParams(vrm: VRM, params: AvatarParams, ctx: ApplyContext): void {
   const root = vrm.scene;
   const skin = standardMaterial(root, MATERIALS.skin);
-  if (skin) skin.map = ctx.skin.update(params.skin);
+  if (skin) {
+    skin.map = ctx.skin.update(params.skin);
+    // The base layer's roughness: the map carries the skin's and the garments' values.
+    skin.roughnessMap = ctx.skin.roughnessMap;
+    skin.roughness = 1;
+  }
   const eyes = standardMaterial(root, MATERIALS.eyes);
   if (eyes) ctx.eyes.set(eyes, params.eyeColor);
   for (const name of [MATERIALS.brows, MATERIALS.lashes]) {

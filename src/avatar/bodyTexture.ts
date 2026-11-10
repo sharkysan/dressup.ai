@@ -1,4 +1,11 @@
-import { CanvasTexture, SRGBColorSpace } from 'three';
+import {
+  CanvasTexture,
+  DataTexture,
+  LinearFilter,
+  LinearMipmapLinearFilter,
+  RGFormat,
+  SRGBColorSpace,
+} from 'three';
 
 /** RGBA pixels, row 0 at the top: an ImageData, or anything shaped like one (tests have no canvas). */
 export type Pixels = { data: Uint8ClampedArray; width: number; height: number };
@@ -37,21 +44,54 @@ export function composeBodyAlbedo(
   return target;
 }
 
+/** The base layer's garments are matte cotton (spec §3), not as glossy as the skin. */
+export const GARMENT_ROUGHNESS = 0.9;
+
 /**
- * The Skin material's map: one canvas the base layer's size (2048², the Skin texture's), recomposited
- * by `update` only when the tint changes. Reads the skin image's pixels once.
+ * The body's roughness, in the base layer's layout: `skin` where the base layer is clear, `garment`
+ * where it is opaque, blended by its alpha in between. Two bytes per texel (an RG texture), both the
+ * roughness × 255: glTF and three.js read roughness from G. Depends on the base layer only, not on the
+ * tint. Pure.
+ */
+export function bodyRoughness(baseLayer: Pixels, skin: number, garment: number): Uint8Array {
+  const b = baseLayer.data;
+  const out = new Uint8Array((b.length / 4) * 2);
+  for (let i = 0, j = 0; i < b.length; i += 4, j += 2) {
+    const a = b[i + 3]! / 255;
+    out[j] = out[j + 1] = Math.round(255 * (skin * (1 - a) + garment * a));
+  }
+  return out;
+}
+
+/**
+ * The Skin material's maps: `texture`, one canvas the base layer's size (2048², the Skin texture's),
+ * recomposited by `update` only when the tint changes; and `roughnessMap` (bodyRoughness), built once,
+ * for the material at roughness 1, so that the garments are matte while the skin keeps `skinRoughness`.
+ * Reads the skin image's pixels once.
  */
 export class SkinTexture {
   readonly texture: CanvasTexture;
+  readonly roughnessMap: DataTexture;
   private readonly context: CanvasRenderingContext2D;
   private readonly skin: Pixels;
   private readonly baseLayer: Pixels;
   private readonly out: ImageData;
   private tint: string | null = null;
 
-  constructor(skinImage: CanvasImageSource, baseLayer: ImageData) {
+  constructor(skinImage: CanvasImageSource, baseLayer: ImageData, skinRoughness: number) {
     const { width, height } = baseLayer;
     this.baseLayer = baseLayer;
+    this.roughnessMap = new DataTexture(
+      bodyRoughness(baseLayer, skinRoughness, GARMENT_ROUGHNESS),
+      width,
+      height,
+      RGFormat,
+    );
+    // Linear data (no colour space), glTF UVs (flipY false, DataTexture's default), filtered like a map.
+    this.roughnessMap.magFilter = LinearFilter;
+    this.roughnessMap.minFilter = LinearMipmapLinearFilter;
+    this.roughnessMap.generateMipmaps = true;
+    this.roughnessMap.needsUpdate = true;
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
@@ -77,6 +117,7 @@ export class SkinTexture {
 
   dispose(): void {
     this.texture.dispose();
+    this.roughnessMap.dispose();
   }
 }
 

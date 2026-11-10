@@ -4,7 +4,7 @@ import { applyParams, setExpression } from '../../src/avatar/applyParams';
 import { ALL_BODY_TARGETS, type BaseMeta } from '../../src/avatar/baseContract';
 import { EyeTextures } from '../../src/avatar/baseMaterials';
 import { avatarScale, bodyInfluences, groundOffset } from '../../src/avatar/body';
-import { SkinTexture } from '../../src/avatar/bodyTexture';
+import { GARMENT_ROUGHNESS, SkinTexture } from '../../src/avatar/bodyTexture';
 import { defaultParams, type AvatarParams } from '../../src/catalog/params';
 
 const meta: BaseMeta = {
@@ -91,7 +91,7 @@ function fakeVrm() {
 const eyeTexture = new Texture();
 function context() {
   const canvasPixels = fakeCanvas();
-  const skin = new SkinTexture({} as CanvasImageSource, baseLayer);
+  const skin = new SkinTexture({} as CanvasImageSource, baseLayer, 0.5);
   const eyes = new EyeTextures(() => Promise.resolve(eyeTexture));
   return { ctx: { skin, eyes, meta }, canvasPixels };
 }
@@ -140,6 +140,23 @@ test('applyParams puts the tinted skin under the base layer, sets the eyes and t
   expect(eyes.alphaTest).toBe(0.5);
   expect('#' + brows.color.getHexString()).toBe('#4a2f1b');
   expect('#' + lashes.color.getHexString()).toBe('#4a2f1b');
+});
+
+test('applyParams gives the skin the base layer roughness map at roughness 1: matte garments, the skin as it was', () => {
+  const { vrm, skin } = fakeVrm();
+  const { ctx } = context();
+
+  applyParams(vrm, params(), ctx);
+
+  expect(skin.roughnessMap).toBe(ctx.skin.roughnessMap);
+  expect(skin.roughness).toBe(1);
+  const g = (texel: number) => (ctx.skin.roughnessMap.image.data as Uint8Array)[texel * 2 + 1]!;
+  expect(g(0)).toBe(Math.round(255 * GARMENT_ROUGHNESS)); // the undershirt texel
+  expect(g(1)).toBe(Math.round(255 * 0.5)); // clear: the skin's own roughness
+  // Tint changes leave it alone.
+  applyParams(vrm, params({ skin: '#f1d7c8' }), ctx);
+  expect(skin.roughnessMap).toBe(ctx.skin.roughnessMap);
+  expect(g(0)).toBe(Math.round(255 * GARMENT_ROUGHNESS));
 });
 
 test('applying the same params twice leaves the brows and the skin canvas as applying once', () => {
