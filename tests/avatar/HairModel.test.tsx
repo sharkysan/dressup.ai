@@ -79,7 +79,7 @@ test('attaches with the current colour and body, then reports the id', async () 
   await flush();
   expect(glb.mesh.parent).toBe(vrm.scene);
   expect('#' + glb.material.color.getHexString()).toBe('#aa3311');
-  expect(glb.material.alphaToCoverage).toBe(true);
+  expect(glb.material.alphaToCoverage).toBe(false);
   expect(glb.mesh.morphTargetInfluences![0]).toBe(1);
   expect(useAppStore.getState().attachedHair).toBe('a');
 });

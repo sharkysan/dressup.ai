@@ -19,10 +19,9 @@ function hairMaterials(root: Object3D): MeshStandardMaterial[] {
   return [...found];
 }
 
-/** The texture is neutral grey, so the colour multiplies it into the hair tint; A2C smooths the cutout edge. */
+/** The texture is neutral grey, so the colour multiplies it into the hair tint; the MASK cutout is kept hard (alphaToCoverage left off: it speckled the edge). */
 function tintHair(material: MeshStandardMaterial, hex: string): void {
   material.color.set(hex);
-  material.alphaToCoverage = true;
 }
 
 const warned = new Set<string>();
