@@ -1,6 +1,6 @@
 /**
  * build-base: the realistic MakeHuman base (spec §4, §7), built headlessly in Blender, → <out>/base.vrm,
- * <out>/base.json (height metadata, baseMetaSchema), <out>/baselayer.webp (the undershirt and shorts,
+ * <out>/base.json (height metadata, baseMetaSchema), <out>/baselayer.webp (the crop top and shorts,
  * painted over the skin at runtime), <out>/regions.png (region-ID map) and <out>/eyes/<preset>.webp (one
  * eye texture per eye-colour preset); and MakeHuman's stock hairstyles, skinned to the base's rig with its
  * body targets, → <hair-out>/<id>.glb.

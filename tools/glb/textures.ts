@@ -104,7 +104,8 @@ export function neutralizeImage(
  * growing outward one texel per pass, at most `maxIterations` passes; alpha and opaque texels stay as
  * they are. Filtering, mipmaps and alpha-to-coverage blend the RGB of transparent texels into the edges
  * of a cutout, so that RGB should be the colour of the edge, not whatever the exporter left there.
- * Texels beyond the reach of the passes, and an image with nothing to bleed from or to, are kept.
+ * Transparent texels the passes do not reach get the mean RGB of all opaque texels, so no texel keeps the
+ * exporter's RGB. An image with nothing to bleed from or to is kept.
  */
 export function bleedAlpha(png: Uint8Array, maxIterations = 16): Uint8Array {
   const img = PNG.sync.read(Buffer.from(png));
@@ -117,6 +118,7 @@ export function bleedAlpha(png: Uint8Array, maxIterations = 16): Uint8Array {
     else unknown++;
   }
   if (unknown === 0 || unknown === known.length) return png;
+  const opaque = known.slice();
 
   for (let pass = 0; pass < maxIterations && unknown > 0; pass++) {
     const filled: number[] = [];
@@ -145,6 +147,20 @@ export function bleedAlpha(png: Uint8Array, maxIterations = 16): Uint8Array {
     // Marked after the pass, so each ring averages the previous ring and not its own neighbours.
     for (const p of filled) known[p] = 1;
     unknown -= filled.length;
+  }
+  if (unknown > 0) {
+    // Far fill: texels the passes did not reach get the mean RGB of all the opaque texels.
+    const sum = [0, 0, 0];
+    let n = 0;
+    for (let p = 0; p < opaque.length; p++) {
+      if (!opaque[p]) continue;
+      n++;
+      for (let c = 0; c < 3; c++) sum[c]! += data[p * 4 + c]!;
+    }
+    for (let p = 0; p < known.length; p++) {
+      if (known[p]) continue;
+      for (let c = 0; c < 3; c++) data[p * 4 + c] = Math.round(sum[c]! / n);
+    }
   }
   return new Uint8Array(PNG.sync.write(img));
 }

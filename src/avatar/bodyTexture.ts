@@ -12,7 +12,7 @@ export type Pixels = { data: Uint8ClampedArray; width: number; height: number };
 
 /**
  * The body albedo (spec §3, §7): the neutral skin multiplied by `tint` (#rrggbb) per channel, with the
- * base layer (undershirt and shorts) composited over it by its straight alpha, so the tint never colours
+ * base layer (the crop top and shorts) composited over it by its straight alpha, so the tint never colours
  * the base layer. Opaque. Pure: writes `out` (a new image by default) and returns it.
  */
 export function composeBodyAlbedo(

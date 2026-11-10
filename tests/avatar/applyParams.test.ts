@@ -20,7 +20,7 @@ const SIZE = 4;
 const skinPixels = Uint8ClampedArray.from({ length: SIZE * SIZE * 4 }, (_, i) =>
   i % 4 === 3 ? 255 : (i * 7) % 256,
 );
-/** Base layer: the first texel opaque undershirt, the rest clear. */
+/** Base layer: the first texel opaque crop top, the rest clear. */
 const baseLayer = {
   data: Uint8ClampedArray.from({ length: SIZE * SIZE * 4 }, (_, i) =>
     i < 4 ? [233, 230, 225, 255][i]! : 0,
@@ -133,7 +133,7 @@ test('applyParams puts the tinted skin under the base layer, sets the eyes and t
 
   expect(skin.map).toBe(ctx.skin.update('#8d5524'));
   const pixels = canvasPixels();
-  expect([...pixels.slice(0, 4)]).toEqual([233, 230, 225, 255]); // the undershirt, untinted
+  expect([...pixels.slice(0, 4)]).toEqual([233, 230, 225, 255]); // the crop top, untinted
   expect(pixels[4]).toBe(Math.round((skinPixels[4]! * 0x8d) / 255)); // tinted skin
   expect(setEyes).toHaveBeenCalledWith(eyes, 'blue');
   expect(eyes.map).toBe(eyeTexture);
@@ -151,7 +151,7 @@ test('applyParams gives the skin the base layer roughness map at roughness 1: ma
   expect(skin.roughnessMap).toBe(ctx.skin.roughnessMap);
   expect(skin.roughness).toBe(1);
   const g = (texel: number) => (ctx.skin.roughnessMap.image.data as Uint8Array)[texel * 2 + 1]!;
-  expect(g(0)).toBe(Math.round(255 * GARMENT_ROUGHNESS)); // the undershirt texel
+  expect(g(0)).toBe(Math.round(255 * GARMENT_ROUGHNESS)); // the crop top texel
   expect(g(1)).toBe(Math.round(255 * 0.5)); // clear: the skin's own roughness
   // Tint changes leave it alone.
   applyParams(vrm, params({ skin: '#f1d7c8' }), ctx);

@@ -196,6 +196,26 @@ describe('bleedAlpha', () => {
     expect([...out.data.subarray(8, 12)]).toEqual([200, 50, 0, 255]);
   });
 
+  test('texels beyond maxIterations get the mean of the opaque texels, alpha unchanged', () => {
+    const src = rgbaPng(
+      5,
+      1,
+      (x) =>
+        [
+          [100, 0, 0, 255],
+          [0, 0, 0, 0],
+          [0, 0, 0, 0],
+          [0, 0, 0, 0],
+          [200, 50, 10, 255],
+        ][x]!,
+    );
+    const out = PNG.sync.read(Buffer.from(bleedAlpha(src, 1)));
+    // Pass 1 fills texels 1 and 3 from one opaque neighbour each; texel 2 is beyond reach: the opaque mean.
+    expect([...out.data.subarray(4, 8)]).toEqual([100, 0, 0, 0]);
+    expect([...out.data.subarray(8, 12)]).toEqual([150, 25, 5, 0]);
+    expect([...out.data.subarray(12, 16)]).toEqual([200, 50, 10, 0]);
+  });
+
   test('an image with no opaque texel, or no transparent one, comes back unchanged', () => {
     const clear = rgbaPng(2, 2, () => [7, 8, 9, 0]);
     expect(bleedAlpha(clear)).toBe(clear);

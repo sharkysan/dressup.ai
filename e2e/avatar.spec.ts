@@ -47,6 +47,8 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByTestId('params-panel')).toBeVisible();
   // Camera framing depends on avatar metrics measured after load; wait for them so the first shot is final.
   await page.waitForFunction(() => window.__kiss?.store.getState().avatarMetrics !== null);
+  // The default hair lands after ready; wait so no baseline shot is taken bald.
+  await hairAttached(page, defaultParams.hair);
 });
 
 test('skin tone changes the render', async ({ page }) => {
@@ -246,7 +248,7 @@ test('the base layer always covers torso and pelvis', async ({ page }) => {
   // Opaque base layer: skin tone must not show through.
   expect(delta(torsoL, mean(dark, at.torso!))).toBeLessThan(12);
   expect(delta(pelvisL, mean(dark, at.pelvis!))).toBeLessThan(12);
-  // Undershirt is light and low-chroma; shorts are dark.
+  // The crop top is light and low-chroma; shorts are dark.
   expect(Math.min(...torsoL)).toBeGreaterThan(150);
   expect(Math.max(...torsoL) - Math.min(...torsoL)).toBeLessThan(30);
   expect(Math.max(...pelvisL)).toBeLessThan(110);

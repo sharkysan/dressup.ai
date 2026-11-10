@@ -1,5 +1,5 @@
 import { OrbitControls } from '@react-three/drei';
-import { Canvas, useThree } from '@react-three/fiber';
+import { Canvas, useThree, type GLProps } from '@react-three/fiber';
 import { useEffect } from 'react';
 import { WebGLRenderer } from 'three';
 import { loadCatalog } from '../catalog/catalog';
@@ -25,13 +25,16 @@ function HandlePublisher() {
  * (the hair's soft edges) the fragment alpha is also written to it: the page then shows through every
  * partly covered strand edge as a pale line, on screen and in the exported PNG. The backdrop is opaque anyway.
  */
-function createRenderer(defaults: { canvas: unknown }) {
+type DefaultGLProps = Parameters<Extract<GLProps, (p: never) => unknown>>[0];
+
+function createRenderer(defaults: DefaultGLProps) {
   const canvas = defaults.canvas as HTMLCanvasElement;
   const context = canvas.getContext('webgl2', {
     alpha: false,
     antialias: true,
     powerPreference: 'high-performance',
-  }) as WebGL2RenderingContext;
+  }) as WebGL2RenderingContext | null;
+  if (!context) throw new Error('Could not create a WebGL2 context without an alpha channel');
   return new WebGLRenderer({ canvas, context, antialias: true });
 }
 

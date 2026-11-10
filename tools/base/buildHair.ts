@@ -16,7 +16,7 @@ import { convertImagesToWebp } from '../glb/webp';
 import { HAIR, HAIR_TEXTURE_SIZE, jointNames, validateHair } from './validateHair';
 import { writeAtomically } from './writeAtomically';
 
-/** Spec §12: each hairstyle ≤1 MiB. */
+/** Plan Global Constraints: each hairstyle ≤1 MiB; the headroom exists because meshopt is an M7 item. */
 export const HAIR_BUDGET_BYTES = 1024 * 1024;
 const WEBP_QUALITY = 90;
 const HAIR_ROUGHNESS = 0.9;

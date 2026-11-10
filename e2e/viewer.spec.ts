@@ -30,3 +30,17 @@ test('canvas follows the viewport on resize', async ({ page }) => {
   await expect.poll(async () => (await canvas.boundingBox())?.width ?? 0).toBeCloseTo(500, -1);
   await expect.poll(async () => (await canvas.boundingBox())?.height ?? 0).toBeCloseTo(900, -1);
 });
+
+test('the renderer uses a context without an alpha channel', async ({ page }) => {
+  await page.goto('/');
+  const viewer = page.getByTestId('viewer');
+  await expect(viewer).toHaveAttribute('data-status', 'ready', { timeout: 45_000 });
+  const alpha = await page.evaluate(
+    () =>
+      document
+        .querySelector<HTMLCanvasElement>('[data-testid=viewer] canvas')
+        ?.getContext('webgl2')
+        ?.getContextAttributes()?.alpha,
+  );
+  expect(alpha).toBe(false);
+});
