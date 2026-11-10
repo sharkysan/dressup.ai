@@ -1,6 +1,6 @@
 import { VRMUtils, type VRM } from '@pixiv/three-vrm';
 import { useFrame } from '@react-three/fiber';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Vector3 } from 'three';
 import type { AvatarParams } from '../catalog/params';
 import { useAppStore } from '../store/useAppStore';
@@ -26,6 +26,8 @@ type Avatar = { vrm: VRM; ctx: ApplyContext };
  */
 export function AvatarModel({ url }: { url: string }) {
   const [avatar, setAvatar] = useState<Avatar | null>(null);
+  // The params last applied to the avatar: prepare()'s at load, then each change the store brings.
+  const applied = useRef<AvatarParams | null>(null);
   const setAvatarStatus = useAppStore((s) => s.setAvatarStatus);
   const setAvatarMetrics = useAppStore((s) => s.setAvatarMetrics);
   const hair = useAppStore((s) => s.params.hair);
@@ -45,6 +47,7 @@ export function AvatarModel({ url }: { url: string }) {
         }
         const { params } = useAppStore.getState();
         loaded = prepare(vrm, meta, baseLayer, params);
+        applied.current = params;
         setAvatarMetrics(measure(vrm, params.body.heightCm));
         setAvatar(loaded);
         setAvatarStatus('ready');
@@ -69,13 +72,19 @@ export function AvatarModel({ url }: { url: string }) {
   // tint). Metrics follow a body change because Box3 ignores morph targets.
   useEffect(() => {
     if (!avatar) return;
-    return useAppStore.subscribe((state, previous) => {
-      if (state.params === previous.params) return;
-      applyParams(avatar.vrm, state.params, avatar.ctx);
-      if (state.params.body !== previous.params.body) {
-        setAvatarMetrics(measure(avatar.vrm, state.params.body.heightCm));
+    const update = (params: AvatarParams) => {
+      if (params === applied.current) return;
+      const previous = applied.current;
+      applyParams(avatar.vrm, params, avatar.ctx);
+      applied.current = params;
+      if (params.body !== previous?.body) {
+        setAvatarMetrics(measure(avatar.vrm, params.body.heightCm));
       }
-    });
+    };
+    // Params set after prepare() read them and before this effect subscribed (e.g. the moment the
+    // status turned ready) would otherwise wait for the next change: apply them now.
+    update(useAppStore.getState().params);
+    return useAppStore.subscribe((state) => update(state.params));
   }, [avatar, setAvatarMetrics]);
 
   useFrame((_, delta) => {
