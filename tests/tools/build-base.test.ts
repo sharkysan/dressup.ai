@@ -10,6 +10,8 @@ import {
   MATERIALS,
   baseMetaSchema,
 } from '../../src/avatar/baseContract';
+import { avatarScale, bodyInfluences, groundOffset } from '../../src/avatar/body';
+import { BODY_MORPHS, defaultParams, type AvatarParams } from '../../src/catalog/params';
 import { validateBase } from '../../tools/base/validateBase';
 import { readAccessor } from '../../tools/glb/accessors';
 import { readGlb } from '../../tools/glb/glb';
@@ -41,6 +43,34 @@ function bodyMinMaxY(doc: GlbDoc): [number, number] {
     const position = doc.json.accessors[p.attributes.POSITION];
     minY = Math.min(minY, position.min[1]);
     maxY = Math.max(maxY, position.max[1]);
+  }
+  return [minY, maxY];
+}
+
+/**
+ * The Body's lowest and highest y with its exported body targets applied at `body`'s influences, the
+ * way the runtime morphs it (each target's POSITION delta times its influence, summed).
+ */
+function morphedMinMaxY(doc: GlbDoc, body: AvatarParams['body']): [number, number] {
+  const found = mesh(doc, BODY_MESH);
+  const names: string[] = found.extras?.targetNames ?? [];
+  const influences = Object.entries(bodyInfluences(body)).filter(([, weight]) => weight !== 0);
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const p of found.primitives) {
+    const y = Float64Array.from(
+      readAccessor(doc, p.attributes.POSITION).filter((_, i) => i % 3 === 1),
+    );
+    for (const [name, weight] of influences) {
+      const target = names.indexOf(name);
+      if (target < 0) throw new Error(`the Body has no target ${name}`);
+      const delta = readAccessor(doc, p.targets[target].POSITION);
+      for (let v = 0; v < y.length; v++) y[v]! += weight * delta[3 * v + 1]!;
+    }
+    for (const value of y) {
+      minY = Math.min(minY, value);
+      maxY = Math.max(maxY, value);
+    }
   }
   return [minY, maxY];
 }
@@ -114,6 +144,31 @@ describe.skipIf(!fs.existsSync(BUILT))('built base (public/assets/base/base.vrm)
     // right of the nose bridge a little, but nothing around the right eye moves more than ~1 mm.
     expect(movedX / moved).toBeGreaterThan(0.01);
     expect(rightEye).toBeLessThan(0.002);
+  });
+
+  // Review Focus 1 and 2 on the real targets: base.json's deltas put the morphed feet on the floor
+  // and make the morphed body exactly heightCm tall, at the extremes e2e drives as well.
+  const signed = BODY_MORPHS.filter((m) => m !== 'gender');
+  const extreme = (value: number, gender: number, heightCm: number) => ({
+    ...defaultParams.body,
+    ...Object.fromEntries(signed.map((m) => [m, value])),
+    gender,
+    heightCm,
+  });
+  test.each([
+    ['default', defaultParams.body],
+    ['every signed morph +1, gender 1, 175 cm', extreme(1, 1, 175)],
+    ['every signed morph -1, gender 0, 175 cm', extreme(-1, 0, 175)],
+    ['every signed morph +1, gender 1, 210 cm', extreme(1, 1, 210)],
+    ['every signed morph -1, gender 0, 140 cm', extreme(-1, 0, 140)],
+  ])('%s: feet within 1 mm of y = 0, height within 0.1%% of heightCm', (_, body) => {
+    const meta = baseMetaSchema.parse(JSON.parse(fs.readFileSync(META, 'utf8')));
+    const scale = avatarScale(body, meta);
+    const offset = groundOffset(body, meta, scale);
+    const [minY, maxY] = morphedMinMaxY(doc, body);
+    expect(Math.abs(minY * scale + offset)).toBeLessThanOrEqual(0.001);
+    const height = body.heightCm / 100;
+    expect(Math.abs((maxY - minY) * scale - height)).toBeLessThanOrEqual(0.001 * height);
   });
 
   test('the body is between 1.5 and 1.85 m tall', () => {
