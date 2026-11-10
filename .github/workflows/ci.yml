@@ -35,13 +35,14 @@ jobs:
           sudo apt-get install -y libxi6 libxxf86vm1 libxfixes3 libxrender1 libgl1 libxkbcommon0 libsm6
 
       - name: Set up the Blender toolchain
+        id: blender-setup
         run: npm run blender:setup
 
-      # Saved as soon as setup has run, even when it or a later step fails, so that the next run need not
-      # download again; skipped on an exact-key hit, which is saved already (a cache key is never
-      # overwritten).
+      # Saved as soon as setup has succeeded, even when a later step fails, so that the next run need not
+      # download again. Never saved after a failed setup: a cache key is never overwritten, so a
+      # half-installed toolchain would stick. Skipped on an exact-key hit, which is saved already.
       - name: Save the Blender toolchain
-        if: always() && steps.blender-cache.outputs.cache-hit != 'true'
+        if: always() && steps.blender-setup.outcome == 'success' && steps.blender-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
