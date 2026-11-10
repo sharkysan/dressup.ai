@@ -73,3 +73,7 @@ test('outfit accepts items per slot and rejects unknown slots', () => {
     avatarParamsSchema.safeParse({ ...defaultParams, outfit: { hat: { id: 'x' } } }).success,
   ).toBe(false);
 });
+
+test('the default hairstyle is bob02', () => {
+  expect(defaultParams.hair).toBe('bob02');
+});

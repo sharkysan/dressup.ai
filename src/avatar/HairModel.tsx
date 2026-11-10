@@ -1,16 +1,28 @@
-import { VRMUtils, type MToonMaterial, type VRM } from '@pixiv/three-vrm';
+import { VRMUtils, type VRM } from '@pixiv/three-vrm';
+import { Mesh, MeshStandardMaterial, type Object3D } from 'three';
 import { useEffect, useRef } from 'react';
 import { findHair } from '../catalog/catalog';
 import { useAppStore } from '../store/useAppStore';
-import { loadGlbWithMToon } from './loadGlb';
-import { materialsWhere, tintMaterial } from './materials';
+import { applyBodyMorphs } from './body';
+import { loadGlb } from './loadGlb';
 import { attachSkinned, type Attachment } from './skinnedAttach';
 
-/** Hair materials by name: VRoid's `*_HAIR` (often wrapped, `N00_000_Hair_00_HAIR_01 (Instance)`), or `hair*`. */
-const isHairMaterial = (name: string) => /_HAIR(?![A-Za-z])|^hair(?![A-Za-z])/i.test(name);
+/** Every standard material in the loaded hair (the GLB's MASK cutout and double-sidedness are kept). */
+function hairMaterials(root: Object3D): MeshStandardMaterial[] {
+  const found = new Set<MeshStandardMaterial>();
+  root.traverse((obj) => {
+    if (!(obj instanceof Mesh)) return;
+    for (const m of Array.isArray(obj.material) ? obj.material : [obj.material]) {
+      if (m instanceof MeshStandardMaterial) found.add(m);
+    }
+  });
+  return [...found];
+}
 
-function hairMaterials(root: Parameters<typeof materialsWhere>[0]): MToonMaterial[] {
-  return materialsWhere(root, isHairMaterial);
+/** The texture is neutral grey, so the colour multiplies it into the hair tint; A2C smooths the cutout edge. */
+function tintHair(material: MeshStandardMaterial, hex: string): void {
+  material.color.set(hex);
+  material.alphaToCoverage = true;
 }
 
 const warned = new Set<string>();
@@ -30,7 +42,9 @@ export function HairModel({
 }) {
   const catalog = useAppStore((s) => s.catalog);
   // Materials are captured before attach: attachSkinned re-parents the meshes out of the loaded root.
-  const current = useRef<{ attachment: Attachment; materials: MToonMaterial[] } | null>(null);
+  const current = useRef<{ attachment: Attachment; materials: MeshStandardMaterial[] } | null>(
+    null,
+  );
   // Latest colour, readable from the load callback so a change mid-load is not lost.
   const colorRef = useRef(hairColor);
   colorRef.current = hairColor;
@@ -44,16 +58,18 @@ export function HairModel({
     }
     if (!entry) return;
 
-    loadGlbWithMToon(entry.url)
+    loadGlb(entry.url)
       .then((root) => {
         if (cancelled) {
           VRMUtils.deepDispose(root);
           return;
         }
         const materials = hairMaterials(root);
-        for (const m of materials) tintMaterial(m, colorRef.current);
+        for (const m of materials) tintHair(m, colorRef.current);
         const attachment = attachSkinned(vrm, root);
         current.current = { attachment, materials };
+        applyBodyMorphs(vrm.scene, useAppStore.getState().params.body);
+        useAppStore.getState().setAttachedHair(hairId);
       })
       .catch((error: unknown) => {
         if (!cancelled) console.warn(`hairstyle "${hairId}" could not be attached:`, error);
@@ -63,13 +79,14 @@ export function HairModel({
       cancelled = true;
       current.current?.attachment.detach();
       current.current = null;
+      useAppStore.getState().setAttachedHair('none');
     };
     // hairColor is applied in the effect below so a colour change never reloads the mesh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vrm, hairId, catalog]);
 
   useEffect(() => {
-    for (const m of current.current?.materials ?? []) tintMaterial(m, hairColor);
+    for (const m of current.current?.materials ?? []) tintHair(m, hairColor);
   }, [hairColor]);
 
   return null;

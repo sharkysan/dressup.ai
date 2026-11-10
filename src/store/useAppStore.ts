@@ -13,6 +13,9 @@ export type AppState = {
   setCatalog: (catalog: Catalog) => void;
   avatarMetrics: AvatarMetrics | null;
   setAvatarMetrics: (metrics: AvatarMetrics | null) => void;
+  /** 'none' when bald, else the hairstyle id once its meshes are attached. Set only by HairModel. */
+  attachedHair: string;
+  setAttachedHair: (id: string) => void;
   setParams: (patch: Partial<AvatarParams>) => void;
   setOutfitItem: (slot: Slot, item: OutfitItem | null) => void;
   setAvatarStatus: (status: AvatarStatus, error?: string) => void;
@@ -25,6 +28,7 @@ const initialState = {
   avatarError: null,
   catalog: null as Catalog | null,
   avatarMetrics: null as AvatarMetrics | null,
+  attachedHair: 'none',
 };
 
 /** `full` (dress/jumpsuit) occupies top+bottom, so the three can never coexist (spec §5). */
@@ -62,6 +66,8 @@ export const useAppStore = create<AppState>()((set) => ({
   setCatalog: (catalog) => set({ catalog }),
 
   setAvatarMetrics: (metrics) => set({ avatarMetrics: metrics }),
+
+  setAttachedHair: (id) => set({ attachedHair: id }),
 
   reset: () => set(initialState),
 }));

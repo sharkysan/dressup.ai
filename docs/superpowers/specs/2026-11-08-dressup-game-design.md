@@ -283,7 +283,7 @@ Pipeline (`npm run assets`, idempotent):
 
 1. `tools/blender/build_base.py` (Blender headless, MPFB2; driven by `tools/build-base.ts`): create the base human, add body-morph shape keys, bake expressions, neutralise skin, bake base layer and region-ID texture, export VRM 1.0.
 2. `tools/build-correspondence.py`: as above.
-3. `tools/build-garments.py` (Blender headless): fit each garment or hairstyle source to the base, verify skeleton compatibility, transfer body-morph shape keys, export GLB.
+3. `tools/build-garments.py` (Blender headless): fit each garment or hairstyle source to the base, verify skeleton compatibility, transfer body-morph shape keys, export GLB. Until M4 adds garments, hairstyles are built by `tools/blender/build_base.py`, not `tools/build-garments.py`.
 4. `gltf-transform`: meshopt compression (for the base an M7 performance item: base.vrm is ~4.4 MB uncompressed today), texture resize (≤2048² for the body, ≤1024² for everything else), WebP textures.
 5. `tools/pose-from-mixamo.ts` for Mixamo-sourced poses.
 6. `tools/build-catalog.ts`: validates every entry, renders thumbnails (256 px, neutral outfit for poses, neutral pose for garments) with headless Chromium via Playwright, writes `catalog.json`.
@@ -329,6 +329,7 @@ Each milestone gets its own implementation plan.
 - M0 Scaffold — done.
 - M1 Face → avatar, attribute version — done, partly superseded by the 2026-11-09 revision. Carried forward: MediaPipe adapter, photo decode, skin/hair/eye colour extraction, hairstyle ranking, debug page, lineup tooling, attach machinery. Retired: VRoid base build, synthetic face morphs, face-shape/brow/lip mapping, MToon materials, two-base model.
 - M2 Realistic base — MPFB2 → VRM pipeline, body-morph shape keys, expressions, region IDs, realistic skin, height scaling, body sliders in the dev panel, default face. Done when the base renders in the app at a range of body shapes and expressions, within budget.
+- M2b Stock hairstyles — MakeHuman's 10 CC0 hairstyles ship as skinned GLBs with body morphs, tinted by `hairColor`, as a stopgap. M3's ≥3 realistic starter hairstyles still stand.
 - Test-photo collection (runs alongside M2 and M3; owner not yet decided) — consent wording (written, adults, photos stay on the tester's machine, deleted after scoring), recruit at least 10 adults spread across skin tones, body types, hair types and genders, one full-length photo each plus height and bust/waist/hip measurements, and a judge who doesn't know them. M3 cannot be signed off until this set exists.
 - M3 Photo likeness and gate — `PoseLandmarker`, body measurement and calibration, correspondence data, face projection, head fit, de-lighting and skin match, `Likeness` store, close-up fallback, debug page updates, ≥3 realistic starter hairstyles. Done when the likeness gate passes.
 - M4 Wardrobe — garment pipeline with body-morph transfer, attach/detach, region masks, catalogue and linter, Outfit tab, ~10 everyday garments. Done when outfits swap without clipping across body shapes in the regression suite.
@@ -346,6 +347,7 @@ Each milestone gets its own implementation plan.
 - 2026-11-09: One base with body morphs replaces two bases; `gender` is a continuous morph, not inferred from the photo.
 - 2026-11-09: Uploads of any photo stay (consent checkbox and terms as before), so the content rules stay strict: no lingerie, sleepwear or nightwear. Allowing those would require the likeness to be locked to the person using the app (live camera capture with a liveness check instead of uploads); that trade-off was considered and declined.
 - 2026-11-09: Share links carry params only; recipients see the default face. The likeness stays on the device (IndexedDB) for continue-later.
+- 2026-11-10: Stock hairstyles ship early, on the owner's request: MakeHuman's 10 CC0 hairstyles (M2b). The default hair is `bob02`. The head binding (§8) moves to M3, where the likeness needs it. meshopt compression moves to M7.
 - 2026-11-09: Themed collections (cosplay & anime, super-heroine, Halloween) stay in v1 and are modelled by scripted Blender, accepting simpler shapes than hand-made assets. The sailor-collar uniform set and the maid-café apron set stay in the cosplay collection. The concern that they read as school-uniform and maid costumes on a lifelike double was raised and considered; they follow the same rules as every garment (§3: cover at least the base layer, party-costume register, no fetish styling).
 - VRM chosen over plain glTF for the standardised humanoid rig and expressions.
 - No physics in v1 (static images; modular hair and garments stay simple).

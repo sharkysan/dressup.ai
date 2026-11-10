@@ -88,7 +88,7 @@ export const defaultParams: AvatarParams = {
   skin: '#c68642',
   hairColor: '#2b1b12',
   eyeColor: 'brown',
-  hair: 'none',
+  hair: 'bob02',
   body: {
     heightCm: 165,
     gender: 0,

@@ -1,6 +1,20 @@
+import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import { defaultParams, type AvatarParams } from '../src/catalog/params';
 import { diffPixels, patchMean, readPngSize } from './helpers/png';
+
+const hairIds: string[] = (
+  JSON.parse(readFileSync('public/assets/catalog.json', 'utf8')) as { hair: { id: string }[] }
+).hair.map((h) => h.id);
+
+/** Waits until the named hairstyle's meshes are attached ('none' when bald). */
+async function hairAttached(page: Page, id: string) {
+  await expect
+    .poll(() => page.evaluate(() => window.__kiss!.store.getState().attachedHair), {
+      timeout: 20_000,
+    })
+    .toBe(id);
+}
 
 const portrait = { ...defaultParams.scene, framing: 'portrait' } as const;
 
@@ -54,12 +68,70 @@ test('an unknown hair id leaves the avatar ready and bald', async ({ page }) => 
   page.on('console', (m) => {
     if (m.type() === 'warning') warnings.push(m.text());
   });
+  await setParams(page, { hair: 'none' });
+  await hairAttached(page, 'none');
   const bald = await shot(page);
   await setParams(page, { hair: 'does_not_exist' });
   const after = await shot(page, 600);
   await expect(page.getByTestId('viewer')).toHaveAttribute('data-status', 'ready');
+  await hairAttached(page, 'none');
   expect(diffPixels(bald, after)).toBeLessThan(100);
   expect(warnings.some((w) => w.includes('does_not_exist'))).toBe(true);
+});
+
+test('a hairstyle renders on the head', async ({ page }) => {
+  await setParams(page, { scene: portrait, hair: 'none' });
+  await hairAttached(page, 'none');
+  const bald = await shot(page, 600);
+  await setParams(page, { hair: 'bob02' });
+  await hairAttached(page, 'bob02');
+  const haired = await shot(page);
+  expect(diffPixels(bald, haired)).toBeGreaterThan(2000);
+});
+
+test('hair colour tints the hair', async ({ page }) => {
+  await setParams(page, { scene: portrait, hair: 'bob02', hairColor: '#2b1b12' });
+  await hairAttached(page, 'bob02');
+  const dark = await shot(page, 600);
+  await setParams(page, { hairColor: '#d9b380' });
+  const blonde = await shot(page);
+  expect(diffPixels(dark, blonde)).toBeGreaterThan(1000);
+});
+
+test('every catalog hairstyle attaches', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  expect(hairIds.length).toBeGreaterThanOrEqual(10);
+  for (const id of hairIds) {
+    await setParams(page, { hair: id });
+    await hairAttached(page, id);
+    await expect(page.getByTestId('viewer')).toHaveAttribute('data-status', 'ready');
+  }
+  expect(errors).toEqual([]);
+});
+
+test('long hair at body extremes stays ready', async ({ page }) => {
+  await setParams(page, { hair: 'long01' });
+  await hairAttached(page, 'long01');
+  const signed = [
+    'weight',
+    'muscle',
+    'shoulders',
+    'bust',
+    'waist',
+    'hips',
+    'legLength',
+    'armLength',
+  ];
+  for (const [value, gender] of [
+    [1, 1],
+    [-1, 0],
+  ] as const) {
+    await setBody(page, { ...Object.fromEntries(signed.map((m) => [m, value])), gender });
+    await page.waitForTimeout(400);
+    await expect(page.getByTestId('viewer')).toHaveAttribute('data-status', 'ready');
+    await hairAttached(page, 'long01');
+  }
 });
 
 test('expressions change the face', async ({ page }) => {
