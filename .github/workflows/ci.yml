@@ -7,7 +7,7 @@ on:
 jobs:
   checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -18,7 +18,39 @@ jobs:
 
       - run: npm ci
 
-      - name: Fetch dev sample VRMs and build assets
+      # The installed toolchain only: setup.sh skips every step whose output is present, so its
+      # downloads (~700 MB) need not be cached as well. Restored here, saved right after setup.
+      - name: Restore the Blender toolchain
+        id: blender-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .blender
+            !.blender/downloads
+          key: blender-${{ runner.os }}-${{ hashFiles('tools/blender/versions.env') }}
+
+      - name: Install Blender's runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxi6 libxxf86vm1 libxfixes3 libxrender1 libgl1 libxkbcommon0 libsm6
+
+      - name: Set up the Blender toolchain
+        id: blender-setup
+        run: npm run blender:setup
+
+      # Saved as soon as setup has succeeded, even when a later step fails, so that the next run need not
+      # download again. Never saved after a failed setup: a cache key is never overwritten, so a
+      # half-installed toolchain would stick. Skipped on an exact-key hit, which is saved already.
+      - name: Save the Blender toolchain
+        if: always() && steps.blender-setup.outcome == 'success' && steps.blender-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .blender
+            !.blender/downloads
+          key: ${{ steps.blender-cache.outputs.cache-primary-key }}
+
+      - name: Build assets
         run: npm run assets:dev
 
       - name: Install Playwright Chromium

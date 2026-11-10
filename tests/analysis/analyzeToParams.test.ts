@@ -1,5 +1,4 @@
 import { analyzeToParams } from '../../src/analysis/mapping';
-import { DEFAULT_CALIBRATION } from '../../src/analysis/calibration';
 import { faceBox, toPixels } from '../../src/analysis/landmarks';
 import type { Analysis } from '../../src/analysis/types';
 import type { Catalog } from '../../src/catalog/catalog';
@@ -11,13 +10,12 @@ function analysis(opts: SynthOptions = {}): Analysis {
   return { face: fx.face, mask: fx.mask, image: fx.image, faceBox: faceBox(toPixels(fx.face)) };
 }
 const catalog: Catalog = {
-  version: 1,
-  bases: [{ id: 'a', name: 'A', url: '/a.vrm' }],
+  version: 2,
+  base: { name: 'A', url: '/a.vrm', meta: '/a.json' },
   hair: [
     {
       id: 'long_01',
       name: 'Long',
-      base: 'a',
       url: '/l.glb',
       tags: { length: 'long', volume: 'medium', bangs: false, parting: 'none' },
     },
@@ -25,24 +23,19 @@ const catalog: Catalog = {
 };
 
 test('returns schema-valid params for the canonical face', () => {
-  const { params, debug } = analyzeToParams(analysis(), {
-    calibration: DEFAULT_CALIBRATION,
-    catalog,
-    base: 'a',
-  });
+  const { params, debug } = analyzeToParams(analysis(), { catalog });
   expect(avatarParamsSchema.safeParse(params).success).toBe(true);
-  expect(params.base).toBe('a');
   expect(params.expression).toBe('neutral');
-  for (const v of Object.values(params.faceShape)) expect(Math.abs(v)).toBeLessThan(1e-6);
-  expect(Object.keys(debug.ratios)).toHaveLength(8);
-  expect(Object.keys(debug.zScores)).toHaveLength(8);
+  expect(params).not.toHaveProperty('faceShape');
+  expect(params).not.toHaveProperty('lipTint');
+  expect(params).not.toHaveProperty('brows');
+  expect(debug).not.toHaveProperty('ratios');
+  expect(debug.swatches).not.toHaveProperty('lips');
 });
 
 test('picks the catalog hairstyle nearest to the detected tags', () => {
   const { params, debug } = analyzeToParams(analysis({ hair: { length: 'long', bangs: false } }), {
-    calibration: DEFAULT_CALIBRATION,
     catalog,
-    base: 'a',
   });
   expect(params.hair).toBe('long_01');
   expect(debug.hairCandidates[0]!.id).toBe('long_01');
@@ -50,9 +43,7 @@ test('picks the catalog hairstyle nearest to the detected tags', () => {
 
 test('no visible hair → none, and hair colour falls back to the brow region', () => {
   const { params, debug } = analyzeToParams(analysis({ hair: { length: 'none' } }), {
-    calibration: DEFAULT_CALIBRATION,
     catalog,
-    base: 'a',
   });
   expect(params.hair).toBe('none');
   expect(debug.swatches.hair).toBeNull();
@@ -66,7 +57,7 @@ test("another person's hair outside the face region does not change the hair col
     centre: { x: 300, y: 400 },
     hair: { length: 'short', volume: 'low' },
   };
-  const opts = { calibration: DEFAULT_CALIBRATION, catalog, base: 'a' as const };
+  const opts = { catalog };
   const alone = analyzeToParams(analysis(primary), opts);
   const crowd = analyzeToParams(
     analysis({
@@ -82,13 +73,11 @@ test("another person's hair outside the face region does not change the hair col
 
 test('keeps unrelated fields from the current params', () => {
   const current = {
-    ...analyzeToParams(analysis(), { calibration: DEFAULT_CALIBRATION, catalog, base: 'a' }).params,
+    ...analyzeToParams(analysis(), { catalog }).params,
     outfit: { top: { id: 'tee_01' } },
   };
   const { params } = analyzeToParams(analysis(), {
-    calibration: DEFAULT_CALIBRATION,
     catalog,
-    base: 'a',
     current,
   });
   expect(params.outfit).toEqual({ top: { id: 'tee_01' } });

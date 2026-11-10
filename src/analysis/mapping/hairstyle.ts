@@ -17,15 +17,13 @@ export function hairDistance(tags: HairTags, style: HairStyle): number {
 export function rankHairstyles(
   tags: HairTags,
   catalog: Catalog,
-  base: 'a' | 'b',
 ): { style: HairStyle; distance: number }[] {
   return catalog.hair
-    .filter((h) => h.base === base)
     .map((style) => ({ style, distance: hairDistance(tags, style) }))
     .sort((a, b) => a.distance - b.distance || a.style.id.localeCompare(b.style.id));
 }
 
-export function nearestHairstyle(tags: HairTags, catalog: Catalog | null, base: 'a' | 'b'): string {
+export function nearestHairstyle(tags: HairTags, catalog: Catalog | null): string {
   if (!tags.present || !catalog) return 'none';
-  return rankHairstyles(tags, catalog, base)[0]?.style.id ?? 'none';
+  return rankHairstyles(tags, catalog)[0]?.style.id ?? 'none';
 }

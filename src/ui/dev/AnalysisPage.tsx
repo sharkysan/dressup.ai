@@ -5,8 +5,6 @@ import {
   messageFor,
   type AnalyzeResult,
 } from '../../analysis/analyze';
-import { accumulateCalibration } from '../../analysis/calibration';
-import { RATIO_KEYS, type Ratios } from '../../analysis/mapping/faceShape';
 import { downloadBlob } from '../../export/download';
 import { Viewer } from '../../scene/Viewer';
 import { useAppStore } from '../../store/useAppStore';
@@ -17,7 +15,7 @@ type Status = 'idle' | 'loading' | 'analysing' | 'done' | 'error';
 
 /**
  * Developer page (#analysis): photo → params with every intermediate visible (spec §13).
- * Records landmark/mask fixtures (no pixels) and accumulates a real-photo calibration set.
+ * Records landmark/mask fixtures (no pixels).
  */
 export function AnalysisPage() {
   const catalog = useAppStore((s) => s.catalog);
@@ -27,7 +25,6 @@ export function AnalysisPage() {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalyzeResult | null>(null);
-  const [samples, setSamples] = useState<Ratios[]>([]);
   const lastFile = useRef<File | null>(null);
 
   async function run(file: File) {
@@ -37,7 +34,6 @@ export function AnalysisPage() {
     try {
       const res = await analyzePhoto(file, {
         catalog,
-        base: params.base,
         current: params,
         onProgress: (f) => {
           setProgress(f);
@@ -71,14 +67,6 @@ export function AnalysisPage() {
     downloadBlob(
       new Blob([JSON.stringify(fixture)], { type: 'application/json' }),
       `fixture-${Date.now()}.json`,
-    );
-  }
-
-  function exportCalibration() {
-    const calibration = accumulateCalibration(samples);
-    downloadBlob(
-      new Blob([JSON.stringify(calibration, null, 2)], { type: 'application/json' }),
-      'calibration.json',
     );
   }
 
@@ -144,18 +132,6 @@ export function AnalysisPage() {
               <button type="button" onClick={recordFixture}>
                 Record fixture
               </button>
-              <button type="button" onClick={() => setSamples([...samples, result.debug.ratios])}>
-                Add to calibration set
-              </button>
-              <span>
-                samples: <b data-testid="calibration-count">{samples.length}</b>
-              </span>
-              <button type="button" disabled={samples.length < 2} onClick={exportCalibration}>
-                Export calibration.json
-              </button>
-              <button type="button" disabled={samples.length === 0} onClick={() => setSamples([])}>
-                Clear
-              </button>
             </div>
           </>
         )}
@@ -183,7 +159,7 @@ function Attributes({ result }: { result: AnalyzeResult }) {
     />
   );
   return (
-    <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+    <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr', gap: 8 }}>
       <div>
         <b>Swatches</b>
         <div>
@@ -191,9 +167,6 @@ function Attributes({ result }: { result: AnalyzeResult }) {
         </div>
         <div>
           {sw(debug.swatches.hair)} hair {debug.swatches.hair ?? '— (no hair)'} → {params.hairColor}
-        </div>
-        <div>
-          {sw(debug.swatches.lips)} lips {debug.swatches.lips}
         </div>
         <div>
           {sw(debug.swatches.eyeSample)} eye {debug.swatches.eyeSample ?? '—'} → {params.eyeColor}
@@ -215,31 +188,6 @@ function Attributes({ result }: { result: AnalyzeResult }) {
             </li>
           ))}
         </ol>
-        <b>Brows</b>
-        <div>
-          {debug.brows.shape}, thickness {debug.brows.thickness.toFixed(2)}
-        </div>
-      </div>
-      <div>
-        <b>Face ratios</b>
-        <table style={{ borderCollapse: 'collapse', width: '100%' }}>
-          <tbody>
-            {RATIO_KEYS.map((k) => (
-              <tr key={k} data-testid={`ratio-${k}`}>
-                <td>{k}</td>
-                <td style={{ textAlign: 'right' }}>{debug.ratios[k].toFixed(3)}</td>
-                <td
-                  style={{
-                    textAlign: 'right',
-                    color: Math.abs(debug.zScores[k]) > 1 ? '#c0392b' : 'inherit',
-                  }}
-                >
-                  z {debug.zScores[k].toFixed(2)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
       </div>
     </div>
   );

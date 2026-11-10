@@ -1,6 +1,5 @@
 import { extractEyeColor } from '../../src/analysis/mapping/eyes';
 import { extractHairColor } from '../../src/analysis/mapping/hairColor';
-import { extractLipTint } from '../../src/analysis/mapping/lips';
 import { extractSkin } from '../../src/analysis/mapping/skin';
 import { categoryEquals, resampleMask } from '../../src/analysis/masks';
 import { toPixels } from '../../src/analysis/landmarks';
@@ -14,7 +13,7 @@ function deltaE(a: string, b: string): number {
   return Math.hypot(la.L - lb.L, la.a - lb.a, la.b - lb.b);
 }
 
-const colors = { skin: '#8d5524', hair: '#2b1b12', iris: '#4a76b0', lips: '#b35a5a' };
+const colors = { skin: '#8d5524', hair: '#2b1b12', iris: '#4a76b0' };
 const fx = synthFace({ hair: { length: 'long', bangs: false }, colors });
 const px = toPixels(fx.face);
 const faceSkin = resampleMask(
@@ -54,8 +53,4 @@ test('extractHairColor is null without hair', () => {
 
 test('extractEyeColor snaps the painted iris to blue', () => {
   expect(extractEyeColor(fx.image, px).preset).toBe('blue');
-});
-
-test('extractLipTint recovers the painted lip colour', () => {
-  expect(deltaE(extractLipTint(fx.image, px), colors.lips)).toBeLessThan(0.05);
 });

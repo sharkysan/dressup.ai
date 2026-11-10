@@ -5,7 +5,22 @@ export const SLOTS = ['top', 'bottom', 'full', 'shoes', 'outer', 'head'] as cons
 export type Slot = (typeof SLOTS)[number];
 
 /** Body regions a garment can hide (spec §7/§8). */
-export type Region = 'torso' | 'upperArms' | 'forearms' | 'thighs' | 'calves' | 'feet' | 'neck';
+export type Region =
+  'torso' | 'pelvis' | 'upperArms' | 'forearms' | 'thighs' | 'calves' | 'feet' | 'neck';
+
+/** Body-shape morph sliders, each -1..1 (spec §5). Blender shape keys are named by baseContract. */
+export const BODY_MORPHS = [
+  'gender',
+  'weight',
+  'muscle',
+  'shoulders',
+  'bust',
+  'waist',
+  'hips',
+  'legLength',
+  'armLength',
+] as const;
+export type BodyMorph = (typeof BODY_MORPHS)[number];
 
 const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'expected a #rrggbb colour');
 const signedUnit = z.number().min(-1).max(1);
@@ -28,32 +43,30 @@ const outfitSchema = z
   })
   .partial();
 
+const bodySchema = z.object({
+  heightCm: z.number().min(140).max(210),
+  gender: unit,
+  weight: signedUnit,
+  muscle: signedUnit,
+  shoulders: signedUnit,
+  bust: signedUnit,
+  waist: signedUnit,
+  hips: signedUnit,
+  legLength: signedUnit,
+  armLength: signedUnit,
+}) satisfies z.ZodType<Record<BodyMorph | 'heightCm', number>>;
+
 /** The single contract between analysis, editor UI, renderer and share links (spec §5). */
-export const avatarParamsSchema = z.object({
-  version: z.literal(1),
-  base: z.enum(['a', 'b']),
+export const avatarParamsSchema = z.strictObject({
+  version: z.literal(2),
   skin: hexColor,
   hairColor: hexColor,
   eyeColor: z.enum(['brown', 'darkBrown', 'hazel', 'green', 'blue', 'grey']),
-  lipTint: hexColor,
   hair: z.string(),
-  brows: z.object({
-    shape: z.enum(['straight', 'arched', 'soft', 'angled']),
-    thickness: unit,
-  }),
-  faceShape: z.object({
-    faceWidth: signedUnit,
-    jawWidth: signedUnit,
-    chinLength: signedUnit,
-    noseWidth: signedUnit,
-    noseLength: signedUnit,
-    eyeSpacing: signedUnit,
-    eyeSize: signedUnit,
-    lipFullness: signedUnit,
-  }),
+  body: bodySchema,
+  face: z.enum(['photo', 'default']),
   extras: z.object({
     glasses: z.string().optional(),
-    facialHair: z.string().optional(),
   }),
   outfit: outfitSchema,
   pose: z.string(),
@@ -71,24 +84,24 @@ export const avatarParamsSchema = z.object({
 export type AvatarParams = z.infer<typeof avatarParamsSchema>;
 
 export const defaultParams: AvatarParams = {
-  version: 1,
-  base: 'a',
+  version: 2,
   skin: '#c68642',
   hairColor: '#2b1b12',
   eyeColor: 'brown',
-  lipTint: '#b35a5a',
   hair: 'none',
-  brows: { shape: 'straight', thickness: 0.5 },
-  faceShape: {
-    faceWidth: 0,
-    jawWidth: 0,
-    chinLength: 0,
-    noseWidth: 0,
-    noseLength: 0,
-    eyeSpacing: 0,
-    eyeSize: 0,
-    lipFullness: 0,
+  body: {
+    heightCm: 165,
+    gender: 0,
+    weight: 0,
+    muscle: 0,
+    shoulders: 0,
+    bust: 0,
+    waist: 0,
+    hips: 0,
+    legLength: 0,
+    armLength: 0,
   },
+  face: 'default',
   extras: {},
   outfit: {},
   pose: 'stand_neutral',

@@ -26,7 +26,7 @@ test('canvas follows the viewport on resize', async ({ page }) => {
     timeout: 45_000,
   });
   await page.setViewportSize({ width: 500, height: 900 });
-  const box = await page.getByTestId('viewer').locator('canvas').boundingBox();
-  expect(box?.width).toBeCloseTo(500, -1);
-  expect(box?.height).toBeCloseTo(900, -1);
+  const canvas = page.getByTestId('viewer').locator('canvas');
+  await expect.poll(async () => (await canvas.boundingBox())?.width ?? 0).toBeCloseTo(500, -1);
+  await expect.poll(async () => (await canvas.boundingBox())?.height ?? 0).toBeCloseTo(900, -1);
 });

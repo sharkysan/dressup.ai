@@ -1,8 +1,15 @@
 import { expect, test, type Page } from '@playwright/test';
 import { defaultParams, type AvatarParams } from '../src/catalog/params';
-import { diffPixels } from './helpers/png';
+import { diffPixels, patchMean, readPngSize } from './helpers/png';
 
-const zero = defaultParams.faceShape;
+const portrait = { ...defaultParams.scene, framing: 'portrait' } as const;
+
+async function setBody(page: Page, patch: Partial<AvatarParams['body']>) {
+  await page.evaluate((p) => {
+    const store = window.__kiss!.store;
+    store.getState().setParams({ body: { ...store.getState().params.body, ...p } });
+  }, patch);
+}
 
 async function setParams(page: Page, patch: Partial<AvatarParams>) {
   await page.evaluate((p) => window.__kiss!.store.getState().setParams(p), patch);
@@ -28,35 +35,18 @@ test.beforeEach(async ({ page }) => {
   await page.waitForFunction(() => window.__kiss?.store.getState().avatarMetrics !== null);
 });
 
-test('face morphs change the render', async ({ page }) => {
-  await setParams(page, { faceShape: { ...zero, faceWidth: -1 } });
-  const narrow = await shot(page);
-  await setParams(page, { faceShape: { ...zero, faceWidth: 1 } });
-  const wide = await shot(page);
-  expect(diffPixels(narrow, wide)).toBeGreaterThan(300);
-});
-
 test('skin tone changes the render', async ({ page }) => {
+  // The dev panel overlays the canvas; keep it out of the sampled pixels.
+  await page.evaluate(() =>
+    document
+      .querySelector<HTMLElement>('[data-testid=params-panel]')!
+      .style.setProperty('display', 'none'),
+  );
   await setParams(page, { skin: '#f1d7c8' });
   const light = await shot(page);
   await setParams(page, { skin: '#5a3a24' });
   const dark = await shot(page);
   expect(diffPixels(light, dark)).toBeGreaterThan(2000);
-});
-
-test('a hairstyle attaches, tints, and detaches', async ({ page }) => {
-  const bald = await shot(page);
-  await setParams(page, { hair: 'hair_twist_01', hairColor: '#2b1b12' });
-  const dark = await shot(page, 2000);
-  expect(diffPixels(bald, dark)).toBeGreaterThan(2000);
-  await setParams(page, { hairColor: '#e8c872' });
-  const blonde = await shot(page);
-  // The whole head of hair changes colour, so this is a large diff; 494 px was the pre-fix noise floor.
-  expect(diffPixels(dark, blonde)).toBeGreaterThan(2000);
-  // Brows follow hairColor, so restore it too before comparing against the original bald frame.
-  await setParams(page, { hair: 'none', hairColor: defaultParams.hairColor });
-  const baldAgain = await shot(page, 600);
-  expect(diffPixels(baldAgain, bald)).toBeLessThan(100);
 });
 
 test('an unknown hair id leaves the avatar ready and bald', async ({ page }) => {
@@ -84,4 +74,110 @@ test('portrait framing moves the camera to the face', async ({ page }) => {
   await setParams(page, { scene: { ...defaultParams.scene, framing: 'portrait' } });
   const portrait = await shot(page, 600);
   expect(diffPixels(full, portrait)).toBeGreaterThan(20_000);
+});
+
+test('every expression differs from neutral', async ({ page }) => {
+  await setParams(page, { scene: portrait });
+  const neutral = await shot(page, 600);
+  for (const expression of ['happy', 'relaxed', 'surprised', 'wink'] as const) {
+    await setParams(page, { expression });
+    const img = await shot(page);
+    expect(diffPixels(neutral, img), expression).toBeGreaterThan(100);
+  }
+});
+
+test('body weight changes the render', async ({ page }) => {
+  await setBody(page, { weight: -1 });
+  const thin = await shot(page);
+  await setBody(page, { weight: 1 });
+  const heavy = await shot(page);
+  expect(diffPixels(thin, heavy)).toBeGreaterThan(2000);
+});
+
+test('height scales the avatar', async ({ page }) => {
+  const headY = async (heightCm: number) => {
+    await setBody(page, { heightCm });
+    await page.waitForTimeout(300);
+    return page.evaluate(() => window.__kiss!.store.getState().avatarMetrics!.headY);
+  };
+  const short = await headY(150);
+  const tall = await headY(190);
+  expect(tall / short).toBeGreaterThan((190 / 150) * 0.98);
+  expect(tall / short).toBeLessThan((190 / 150) * 1.02);
+});
+
+test('all body extremes keep the avatar grounded', async ({ page }) => {
+  const signed = [
+    'weight',
+    'muscle',
+    'shoulders',
+    'bust',
+    'waist',
+    'hips',
+    'legLength',
+    'armLength',
+  ];
+  for (const [value, gender] of [
+    [1, 1],
+    [-1, 0],
+  ] as const) {
+    const body = Object.fromEntries(signed.map((m) => [m, value]));
+    await setBody(page, { ...body, gender, heightCm: 175 });
+    await page.waitForTimeout(400);
+    await expect(page.getByTestId('viewer')).toHaveAttribute('data-status', 'ready');
+    const m = await page.evaluate(() => window.__kiss!.store.getState().avatarMetrics!);
+    expect(Number.isFinite(m.headY) && Number.isFinite(m.height)).toBe(true);
+    expect(m.headY).toBeGreaterThan(1.2);
+    expect(m.headY).toBeLessThan(2.1);
+  }
+});
+
+test('eye colour changes the eyes', async ({ page }) => {
+  await setParams(page, { scene: portrait, eyeColor: 'brown' });
+  const brown = await shot(page, 600);
+  await setParams(page, { eyeColor: 'blue' });
+  const blue = await shot(page);
+  expect(diffPixels(brown, blue)).toBeGreaterThan(50);
+});
+
+test('the base layer always covers torso and pelvis', async ({ page }) => {
+  const spots = async () => {
+    const pt = (name: string) => page.evaluate((n) => window.__kiss!.nodeScreenPoint(n), name);
+    const [spine, neck, pelvis, calf] = await Promise.all(
+      ['spine_03', 'neck_01', 'pelvis', 'calf_l'].map(pt),
+    );
+    // spine_02 projects into the high-waisted shorts on this base; the chest midway up the spine is shirt.
+    const chest = spine && neck && { ...spine, y: (spine.y + neck.y) / 2 };
+    return { torso: chest, pelvis, calf };
+  };
+  // The dev panel overlays the canvas; keep it out of the sampled pixels.
+  await page.evaluate(() =>
+    document
+      .querySelector<HTMLElement>('[data-testid=params-panel]')!
+      .style.setProperty('display', 'none'),
+  );
+  await setParams(page, { skin: '#f1d7c8' });
+  const light = await shot(page);
+  const at = await spots();
+  await setParams(page, { skin: '#4a2c20' });
+  const dark = await shot(page);
+  expect(at.torso && at.pelvis && at.calf).toBeTruthy();
+  // Screenshots are device-pixel sized, the points are CSS pixels.
+  const mean = (img: Buffer, p: { x: number; y: number; width: number }) => {
+    const scale = readPngSize(img).width / p.width;
+    return patchMean(img, p.x * scale, p.y * scale, Math.round(2 * scale));
+  };
+  const delta = (a: number[], b: number[]) => Math.max(...a.map((v, i) => Math.abs(v - b[i]!)));
+  const torsoL = mean(light, at.torso!);
+  const pelvisL = mean(light, at.pelvis!);
+  const calfL = mean(light, at.calf!);
+  // Opaque base layer: skin tone must not show through.
+  expect(delta(torsoL, mean(dark, at.torso!))).toBeLessThan(12);
+  expect(delta(pelvisL, mean(dark, at.pelvis!))).toBeLessThan(12);
+  // Undershirt is light and low-chroma; shorts are dark.
+  expect(Math.min(...torsoL)).toBeGreaterThan(150);
+  expect(Math.max(...torsoL) - Math.min(...torsoL)).toBeLessThan(30);
+  expect(Math.max(...pelvisL)).toBeLessThan(110);
+  // Bare skin does respond to the tint.
+  expect(delta(calfL, mean(dark, at.calf!))).toBeGreaterThan(40);
 });

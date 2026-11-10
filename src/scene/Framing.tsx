@@ -2,7 +2,7 @@ import { useThree } from '@react-three/fiber';
 import { useEffect } from 'react';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { useAppStore } from '../store/useAppStore';
-import { cameraFor } from './framing';
+import { cameraFor } from './cameraPose';
 
 /** Applies the current framing to the camera and the default OrbitControls target. */
 export function Framing() {

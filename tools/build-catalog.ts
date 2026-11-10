@@ -1,13 +1,13 @@
 /**
- * build-catalog: assets/source/** meta.json sidecars + built files → public/assets/catalog.json.
+ * build-catalog: assets/source/** hair meta.json sidecars + the built base → public/assets/catalog.json.
  *   tsx tools/build-catalog.ts --source assets/source --public public/assets --out public/assets/catalog.json
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { BASE_META_URL, BASE_URL } from '../src/avatar/baseContract';
 import { catalogSchema, type Catalog } from '../src/catalog/catalog';
 import { cli, required } from './cli';
 
-type BaseMeta = { id: 'a' | 'b'; name: string; license?: string };
 type HairMeta = Omit<Catalog['hair'][number], 'url' | 'thumb'> & { license?: string };
 
 function readJson<T>(file: string): T {
@@ -15,21 +15,12 @@ function readJson<T>(file: string): T {
 }
 
 export function buildCatalog(opts: { source: string; publicDir: string; out: string }): Catalog {
-  const bases: Catalog['bases'] = [];
-  const hair: Catalog['hair'] = [];
-
-  for (const entry of fs.readdirSync(opts.source).sort()) {
-    const dir = path.join(opts.source, entry);
-    if (!fs.statSync(dir).isDirectory()) continue;
-    if (entry.startsWith('base-')) {
-      const meta = readJson<BaseMeta>(path.join(dir, 'meta.json'));
-      const file = `avatars/base-${meta.id}.vrm`;
-      if (!fs.existsSync(path.join(opts.publicDir, file))) {
-        throw new Error(`base "${meta.id}": built file ${file} is missing — run assets:base`);
-      }
-      bases.push({ id: meta.id, name: meta.name, url: `/assets/${file}` });
-    }
+  const file = BASE_URL.replace(/^\/assets\//, '');
+  if (!fs.existsSync(path.join(opts.publicDir, file))) {
+    throw new Error(`base: built file ${file} is missing — run assets:base`);
   }
+  const base: Catalog['base'] = { name: 'MakeHuman base', url: BASE_URL, meta: BASE_META_URL };
+  const hair: Catalog['hair'] = [];
 
   const hairDir = path.join(opts.source, 'hair');
   if (fs.existsSync(hairDir)) {
@@ -39,13 +30,13 @@ export function buildCatalog(opts: { source: string; publicDir: string; out: str
       const { license: _license, ...meta } = readJson<HairMeta>(metaFile);
       const file = `hair/${meta.id}.glb`;
       if (!fs.existsSync(path.join(opts.publicDir, file))) {
-        throw new Error(`hair "${meta.id}": built file ${file} is missing — run assets:hair`);
+        throw new Error(`hair "${meta.id}": built file ${file} is missing — build the hair assets`);
       }
       hair.push({ ...meta, url: `/assets/${file}` });
     }
   }
 
-  const catalog = catalogSchema.parse({ version: 1, bases, hair });
+  const catalog = catalogSchema.parse({ version: 2, base, hair });
   fs.mkdirSync(path.dirname(opts.out), { recursive: true });
   fs.writeFileSync(opts.out, JSON.stringify(catalog, null, 2) + '\n');
   return catalog;
@@ -59,9 +50,7 @@ if (process.argv[1] && /build-catalog\.(ts|js)$/.test(process.argv[1])) {
       publicDir: required(args.public, 'public'),
       out: required(args.out, 'out'),
     });
-    console.log(
-      `wrote ${args.out}: ${catalog.bases.length} base(s), ${catalog.hair.length} hairstyle(s)`,
-    );
+    console.log(`wrote ${args.out}: base, ${catalog.hair.length} hairstyle(s)`);
   } catch (e) {
     console.error(e instanceof Error ? e.message : e);
     process.exit(1);

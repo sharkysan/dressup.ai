@@ -1,64 +1,110 @@
-import { MToonMaterial, VRMExpression, VRMExpressionManager, type VRM } from '@pixiv/three-vrm';
-import { BufferGeometry, Group, Mesh } from 'three';
-import { EYE_COLORS } from '../../src/avatar/eyeColors';
-import { mixHex } from '../../src/avatar/materials';
-import { applyParams, setExpression, setFaceShape } from '../../src/avatar/applyParams';
+import { VRMExpression, VRMExpressionManager, type VRM } from '@pixiv/three-vrm';
+import { BufferGeometry, Group, Mesh, MeshStandardMaterial, Texture } from 'three';
+import { applyParams, setExpression } from '../../src/avatar/applyParams';
+import { ALL_BODY_TARGETS, type BaseMeta } from '../../src/avatar/baseContract';
+import { EyeTextures } from '../../src/avatar/baseMaterials';
+import { avatarScale, bodyInfluences, groundOffset } from '../../src/avatar/body';
+import { GARMENT_ROUGHNESS, SkinTexture } from '../../src/avatar/bodyTexture';
 import { defaultParams, type AvatarParams } from '../../src/catalog/params';
 
-const zero = defaultParams.faceShape;
+const meta: BaseMeta = {
+  version: 1,
+  heightM: 1.65,
+  minY: -0.01,
+  morphHeightDelta: { body_legLength_max: 0.18, body_legLength_min: -0.13 },
+  morphMinYDelta: { body_legLength_max: -0.1 },
+};
 
-function named(name: string) {
-  const m = new MToonMaterial();
+const SIZE = 4;
+/** The skin image's pixels: a gradient, so a stale or accumulated composite would show. */
+const skinPixels = Uint8ClampedArray.from({ length: SIZE * SIZE * 4 }, (_, i) =>
+  i % 4 === 3 ? 255 : (i * 7) % 256,
+);
+/** Base layer: the first texel opaque undershirt, the rest clear. */
+const baseLayer = {
+  data: Uint8ClampedArray.from({ length: SIZE * SIZE * 4 }, (_, i) =>
+    i < 4 ? [233, 230, 225, 255][i]! : 0,
+  ),
+  width: SIZE,
+  height: SIZE,
+} as ImageData;
+
+/**
+ * jsdom has no 2D canvas: a stand-in whose drawImage paints the skin pixels and whose canvas pixels the
+ * test reads back.
+ */
+function fakeCanvas() {
+  let pixels = new Uint8ClampedArray(skinPixels.length);
+  const context = {
+    drawImage: () => {
+      pixels = skinPixels.slice();
+    },
+    getImageData: (_x: number, _y: number, width: number, height: number) => ({
+      data: pixels.slice(),
+      width,
+      height,
+    }),
+    createImageData: (width: number, height: number) => ({
+      data: new Uint8ClampedArray(width * height * 4),
+      width,
+      height,
+    }),
+    putImageData: (image: ImageData) => {
+      pixels = image.data.slice();
+    },
+  };
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => context as never);
+  return () => pixels;
+}
+
+function named(name: string, options = {}) {
+  const m = new MeshStandardMaterial(options);
   m.name = name;
   return m;
 }
 
-/** A stand-in VRM: a scene with named materials and a Face mesh carrying morph targets. */
+/** A stand-in VRM: the base's materials on plain meshes, the body targets on Body, the expressions. */
 function fakeVrm() {
   const scene = new Group();
-  const skin = named('Body_00_SKIN');
-  const faceSkin = named('Face_00_SKIN');
-  const iris = named('EyeIris_00_EYE');
-  const brow = named('FaceBrow_00_FACE');
-  const mouth = named('FaceMouth_00_FACE');
-  const face = new Mesh(new BufferGeometry(), [faceSkin, iris, brow, mouth]);
-  face.morphTargetDictionary = { faceWidth_min: 0, faceWidth_max: 1, Fcl_ALL_Joy: 2 };
-  face.morphTargetInfluences = [0, 0, 0];
-  scene.add(new Mesh(new BufferGeometry(), skin), face);
+  const skin = named('Skin', { map: new Texture() });
+  const eyes = named('Eyes', { map: new Texture(), alphaTest: 0.5 });
+  const brows = named('Brows');
+  const lashes = named('Lashes');
+  const body = new Mesh(new BufferGeometry(), skin);
+  body.morphTargetDictionary = Object.fromEntries(ALL_BODY_TARGETS.map((name, i) => [name, i]));
+  body.morphTargetInfluences = ALL_BODY_TARGETS.map(() => 0);
+  scene.add(
+    body,
+    new Mesh(new BufferGeometry(), eyes),
+    new Mesh(new BufferGeometry(), brows),
+    new Mesh(new BufferGeometry(), lashes),
+  );
 
   const expressionManager = new VRMExpressionManager();
   for (const name of ['neutral', 'happy', 'relaxed', 'surprised', 'blinkLeft']) {
     expressionManager.registerExpression(new VRMExpression(name));
   }
   const vrm = { scene, expressionManager } as unknown as VRM;
-  return { vrm, scene, face, skin, iris, brow, mouth, expressionManager };
+  return { vrm, scene, body, skin, eyes, brows, lashes, expressionManager };
 }
 
-test('positive faceWidth drives only the _max target', () => {
-  const { scene, face } = fakeVrm();
-  setFaceShape(scene, { ...zero, faceWidth: 0.6 });
-  expect(face.morphTargetInfluences).toEqual([0, 0.6, 0]);
+const eyeTexture = new Texture();
+function context() {
+  const canvasPixels = fakeCanvas();
+  const skin = new SkinTexture({} as CanvasImageSource, baseLayer, 0.5);
+  const eyes = new EyeTextures(() => Promise.resolve(eyeTexture));
+  return { ctx: { skin, eyes, meta }, canvasPixels };
+}
+
+const params = (patch: Partial<AvatarParams> = {}): AvatarParams => ({
+  ...defaultParams,
+  skin: '#8d5524',
+  hairColor: '#4a2f1b',
+  eyeColor: 'blue',
+  ...patch,
 });
 
-test('negative faceWidth drives only the _min target', () => {
-  const { scene, face } = fakeVrm();
-  setFaceShape(scene, { ...zero, faceWidth: -0.4 });
-  expect(face.morphTargetInfluences![0]).toBeCloseTo(0.4);
-  expect(face.morphTargetInfluences![1]).toBe(0);
-});
-
-test('weights are clamped to -1..1', () => {
-  const { scene, face } = fakeVrm();
-  setFaceShape(scene, { ...zero, faceWidth: 1.5 });
-  expect(face.morphTargetInfluences![1]).toBe(1);
-});
-
-test('expression targets are left untouched by setFaceShape', () => {
-  const { scene, face } = fakeVrm();
-  face.morphTargetInfluences![2] = 1;
-  setFaceShape(scene, zero);
-  expect(face.morphTargetInfluences![2]).toBe(1);
-});
+afterEach(() => vi.restoreAllMocks());
 
 test('setExpression resets the previous preset', () => {
   const { vrm, expressionManager: em } = fakeVrm();
@@ -77,30 +123,77 @@ test('wink maps to blinkLeft and neutral clears all', () => {
   expect(em.getValue('happy')).toBe(0);
 });
 
-test('applyParams tints skin, iris, brows and lips from params', () => {
-  const { vrm, skin, iris, brow, mouth } = fakeVrm();
-  const params: AvatarParams = {
-    ...defaultParams,
-    skin: '#8d5524',
-    hairColor: '#111111',
-    eyeColor: 'blue',
-    lipTint: '#b35a5a',
-  };
-  applyParams(vrm, params);
-  expect('#' + skin.color.getHexString()).toBe('#8d5524');
-  expect('#' + iris.color.getHexString()).toBe(EYE_COLORS.blue);
-  expect('#' + brow.color.getHexString()).toBe('#111111');
-  expect('#' + mouth.color.getHexString()).toBe(mixHex('#ffffff', '#b35a5a', 0.35));
+test('applyParams puts the tinted skin under the base layer, sets the eyes and tints brows and lashes', async () => {
+  const { vrm, skin, eyes, brows, lashes } = fakeVrm();
+  const { ctx, canvasPixels } = context();
+  const setEyes = vi.spyOn(ctx.eyes, 'set');
+
+  applyParams(vrm, params(), ctx);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(skin.map).toBe(ctx.skin.update('#8d5524'));
+  const pixels = canvasPixels();
+  expect([...pixels.slice(0, 4)]).toEqual([233, 230, 225, 255]); // the undershirt, untinted
+  expect(pixels[4]).toBe(Math.round((skinPixels[4]! * 0x8d) / 255)); // tinted skin
+  expect(setEyes).toHaveBeenCalledWith(eyes, 'blue');
+  expect(eyes.map).toBe(eyeTexture);
+  expect(eyes.alphaTest).toBe(0.5);
+  expect('#' + brows.color.getHexString()).toBe('#4a2f1b');
+  expect('#' + lashes.color.getHexString()).toBe('#4a2f1b');
 });
 
-test('applyParams is idempotent', () => {
-  const { vrm, skin, face } = fakeVrm();
-  const params: AvatarParams = { ...defaultParams, faceShape: { ...zero, jawWidth: 0.3 } };
-  applyParams(vrm, params);
-  const once = skin.color.getHex();
-  const influences = [...face.morphTargetInfluences!];
-  applyParams(vrm, params);
-  applyParams(vrm, params);
-  expect(skin.color.getHex()).toBe(once);
-  expect(face.morphTargetInfluences).toEqual(influences);
+test('applyParams gives the skin the base layer roughness map at roughness 1: matte garments, the skin as it was', () => {
+  const { vrm, skin } = fakeVrm();
+  const { ctx } = context();
+
+  applyParams(vrm, params(), ctx);
+
+  expect(skin.roughnessMap).toBe(ctx.skin.roughnessMap);
+  expect(skin.roughness).toBe(1);
+  const g = (texel: number) => (ctx.skin.roughnessMap.image.data as Uint8Array)[texel * 2 + 1]!;
+  expect(g(0)).toBe(Math.round(255 * GARMENT_ROUGHNESS)); // the undershirt texel
+  expect(g(1)).toBe(Math.round(255 * 0.5)); // clear: the skin's own roughness
+  // Tint changes leave it alone.
+  applyParams(vrm, params({ skin: '#f1d7c8' }), ctx);
+  expect(skin.roughnessMap).toBe(ctx.skin.roughnessMap);
+  expect(g(0)).toBe(Math.round(255 * GARMENT_ROUGHNESS));
+});
+
+test('applying the same params twice leaves the brows and the skin canvas as applying once', () => {
+  const { vrm, brows, expressionManager: em } = fakeVrm();
+  const { ctx, canvasPixels } = context();
+  const p = params({ expression: 'happy' });
+
+  applyParams(vrm, p, ctx);
+  const browsOnce = brows.color.getHex();
+  const pixelsOnce = canvasPixels().slice();
+  applyParams(vrm, p, ctx);
+  expect(brows.color.getHex()).toBe(browsOnce);
+  expect(canvasPixels()).toEqual(pixelsOnce);
+  expect(em.getValue('happy')).toBe(1);
+
+  // A different tint and back: composited from the skin image, never from the canvas.
+  applyParams(vrm, params({ skin: '#f1d7c8', hairColor: '#e8c872' }), ctx);
+  expect(canvasPixels()).not.toEqual(pixelsOnce);
+  applyParams(vrm, p, ctx);
+  expect(canvasPixels()).toEqual(pixelsOnce);
+  expect(brows.color.getHex()).toBe(browsOnce);
+});
+
+test('applyParams sets the body morphs, height scale and grounding', () => {
+  const { vrm, body } = fakeVrm();
+  const { ctx } = context();
+  const shape = { ...defaultParams.body, weight: 0.6, waist: -0.4, legLength: 1, heightCm: 172 };
+
+  applyParams(vrm, params({ body: shape }), ctx);
+
+  const expected = bodyInfluences(shape);
+  for (const name of ALL_BODY_TARGETS) {
+    expect(body.morphTargetInfluences![body.morphTargetDictionary![name]!], name).toBe(
+      expected[name],
+    );
+  }
+  const scale = avatarScale(shape, meta);
+  expect(vrm.scene.scale.y).toBeCloseTo(scale, 9);
+  expect(vrm.scene.position.y).toBeCloseTo(groundOffset(shape, meta, scale), 9);
 });

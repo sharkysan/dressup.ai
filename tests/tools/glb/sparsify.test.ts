@@ -41,3 +41,22 @@ test('an all-zero target becomes sparse with count 0 and no bufferView', () => {
     new Array(12).fill(0),
   );
 });
+
+test('with an epsilon, components within it count as zero and read back as zero', () => {
+  const noisy = [7e-7, 0, -7e-7, 0.5, 0, 0, 0, 1e-6, 0, 0, -5e-7, 0];
+  const plain = sparsifyMorphTargets(withTarget(noisy));
+  const plainFace = plain.json.meshes.find((m: { name: string }) => m.name === 'Face');
+  // Default epsilon 0: every noisy vertex counts as moved, so the target stays dense.
+  expect(plain.json.accessors[plainFace.primitives[0].targets[0].POSITION].sparse).toBeUndefined();
+
+  const out = sparsifyMorphTargets(withTarget(noisy), { epsilon: 1e-6 });
+  const face = out.json.meshes.find((m: { name: string }) => m.name === 'Face');
+  const acc = out.json.accessors[face.primitives[0].targets[0].POSITION];
+  expect(acc.sparse.count).toBe(1);
+  expect(Array.from(readAccessor(out, face.primitives[0].targets[0].POSITION))).toEqual([
+    0, 0, 0, 0.5, 0, 0, 0, 0, 0, 0, 0, 0,
+  ]);
+  // min/max describe the values as they now read, not the dropped noise.
+  expect(acc.min).toEqual([0, 0, 0]);
+  expect(acc.max).toEqual([0.5, 0, 0]);
+});

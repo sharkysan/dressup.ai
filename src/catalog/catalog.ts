@@ -4,7 +4,6 @@ import { z } from 'zod';
 export const hairStyleSchema = z.object({
   id: z.string(),
   name: z.string(),
-  base: z.enum(['a', 'b']),
   url: z.string(),
   thumb: z.string().optional(),
   tags: z.object({
@@ -17,8 +16,8 @@ export const hairStyleSchema = z.object({
 export type HairStyle = z.infer<typeof hairStyleSchema>;
 
 export const catalogSchema = z.object({
-  version: z.literal(1),
-  bases: z.array(z.object({ id: z.enum(['a', 'b']), name: z.string(), url: z.string() })),
+  version: z.literal(2),
+  base: z.object({ name: z.string(), url: z.string(), meta: z.string() }),
   hair: z.array(hairStyleSchema),
 });
 export type Catalog = z.infer<typeof catalogSchema>;

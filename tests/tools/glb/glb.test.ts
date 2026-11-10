@@ -1,5 +1,4 @@
 // @vitest-environment node
-import fs from 'node:fs';
 import { readGlb, writeGlb } from '../../../tools/glb/glb';
 import { makeGlb } from '../../../tools/test-fixtures/makeGlb';
 
@@ -17,13 +16,6 @@ test('rejects a non-GLB buffer', () => {
   expect(() => readGlb(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]))).toThrow(
     /not a GLB/,
   );
-});
-
-test('reads the real sample VRM when present', () => {
-  const p = 'assets/source/base-a/neutral.vrm';
-  if (!fs.existsSync(p)) return;
-  const doc = readGlb(new Uint8Array(fs.readFileSync(p)));
-  expect(doc.json.extensionsUsed).toContain('VRMC_vrm');
 });
 
 test('rejects compressed inputs the toolkit cannot read', () => {

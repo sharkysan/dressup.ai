@@ -9,13 +9,12 @@ import { useAppStore } from '../../src/store/useAppStore';
 vi.mock('../../src/avatar/loadGlb', () => ({ loadGlbWithMToon: vi.fn() }));
 
 const catalog: Catalog = {
-  version: 1,
-  bases: [{ id: 'a', name: 'A', url: '/a.vrm' }],
+  version: 2,
+  base: { name: 'A', url: '/a.vrm', meta: '/a.json' },
   hair: [
     {
       id: 'hair_x',
       name: 'X',
-      base: 'a',
       url: '/x.glb',
       tags: { length: 'short', volume: 'low', bangs: false, parting: 'none' },
     },

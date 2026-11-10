@@ -86,12 +86,7 @@ test.describe('with models', () => {
     const status = page.getByTestId('analysis-status');
     await expect(status).toHaveAttribute('data-analysis', 'done', { timeout: 90_000 });
     const params = await page.evaluate(() => window.__kiss!.store.getState().params);
-    expect(params.version).toBe(1);
-    for (const v of Object.values(params.faceShape)) {
-      expect(v).toBeGreaterThanOrEqual(-0.8);
-      expect(v).toBeLessThanOrEqual(0.8);
-    }
+    expect(params.version).toBe(2);
     expect(params.skin).toMatch(/^#[0-9a-f]{6}$/i);
-    await expect(page.getByTestId('ratio-faceAspect')).toBeVisible();
   });
 });

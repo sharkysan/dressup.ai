@@ -1,6 +1,5 @@
-import { FACE_SHAPE_KEYS } from '../../avatar/applyParams';
 import { EYE_COLORS } from '../../avatar/eyeColors';
-import { defaultParams, type AvatarParams } from '../../catalog/params';
+import { BODY_MORPHS, defaultParams, type AvatarParams } from '../../catalog/params';
 import { useAppStore } from '../../store/useAppStore';
 
 const EXPRESSIONS: AvatarParams['expression'][] = [
@@ -17,7 +16,10 @@ export function ParamsPanel() {
   const catalog = useAppStore((s) => s.catalog);
   const setParams = useAppStore((s) => s.setParams);
 
-  const hairOptions = (catalog?.hair ?? []).filter((h) => h.base === params.base);
+  const setBody = (patch: Partial<AvatarParams['body']>) =>
+    setParams({ body: { ...params.body, ...patch } });
+
+  const hairOptions = catalog?.hair ?? [];
 
   return (
     <aside style={panelStyle} data-testid="params-panel">
@@ -37,14 +39,6 @@ export function ParamsPanel() {
           type="color"
           value={params.hairColor}
           onChange={(e) => setParams({ hairColor: e.target.value })}
-        />
-      </Row>
-      <Row label="Lip tint">
-        <input
-          data-testid="param-lipTint"
-          type="color"
-          value={params.lipTint}
-          onChange={(e) => setParams({ lipTint: e.target.value })}
         />
       </Row>
       <Row label="Eyes">
@@ -105,18 +99,27 @@ export function ParamsPanel() {
         </select>
       </Row>
 
-      {FACE_SHAPE_KEYS.map((key) => (
-        <Row key={key} label={key}>
+      <Row label="Height (cm)">
+        <input
+          data-testid="param-body-heightCm"
+          type="range"
+          min={140}
+          max={210}
+          step={1}
+          value={params.body.heightCm}
+          onChange={(e) => setBody({ heightCm: Number(e.target.value) })}
+        />
+      </Row>
+      {BODY_MORPHS.map((morph) => (
+        <Row key={morph} label={morph}>
           <input
-            data-testid={`param-faceShape-${key}`}
+            data-testid={`param-body-${morph}`}
             type="range"
-            min={-1}
+            min={morph === 'gender' ? 0 : -1}
             max={1}
             step={0.05}
-            value={params.faceShape[key]}
-            onChange={(e) =>
-              setParams({ faceShape: { ...params.faceShape, [key]: Number(e.target.value) } })
-            }
+            value={params.body[morph]}
+            onChange={(e) => setBody({ [morph]: Number(e.target.value) })}
           />
         </Row>
       ))}
