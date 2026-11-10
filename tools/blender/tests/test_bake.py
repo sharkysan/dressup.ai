@@ -13,6 +13,7 @@ from bake import (
     anchored,
     base_layer,
     classify_regions,
+    coverage_gaps,
     darken,
     disc_weights,
     face_regions,
@@ -26,6 +27,7 @@ from bake import (
     rasterise,
     smooth_patch,
     tent_weights,
+    trunk_membership,
     uv_islands,
     waist_plane,
     widen,
@@ -347,6 +349,67 @@ class BaseLayerTest(unittest.TestCase):
         finally:
             bake.BAND_ROWS = original
         np.testing.assert_array_equal(banded, whole)
+
+
+class TrunkMembershipTest(unittest.TestCase):
+    def test_sums_torso_pelvis_thigh_above_the_hem_neck_below_the_neckline_and_arm_outside_the_armholes(self):
+        planes = {"hem_z": 0.5, "neck_z": 2.0, "armhole": InArmholesTest.ARMHOLE}
+        x = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.2])
+        z = np.array([1.0, 0.6, 0.4, 1.9, 2.1, 1.0, 1.25])
+        part = np.array([0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        ones = np.ones(7)
+        np.testing.assert_allclose(
+            trunk_membership(
+                x,
+                z,
+                part,
+                part,
+                ones * [0, 1, 1, 0, 0, 0, 0],
+                ones * [0, 0, 0, 1, 1, 0, 0],
+                ones * [0, 0, 0, 0, 0, 1, 1],
+                **planes,
+            ),
+            [0.2, 1, 0, 1, 0, 1, 0],
+        )
+
+
+class CoverageGapsTest(unittest.TestCase):
+    # The hem at 0.5, the armholes' bottom at 1.5 - 0.3 = 1.2; the tests take a margin of 0.1 above the hem.
+    PLANES = {
+        "hem_z": 0.5,
+        "waist_z": 1.0,
+        "neck_z": 2.0,
+        "armhole": {"strap_x": 10.0, "curve_z": 1.5, "width": 1.0, "depth": 0.3},
+    }
+
+    def layer(self):
+        # One torso quad from z 1.6 (top row) down to 0.2 (bottom row): the trunk throughout, clothed by
+        # base_layer from the hem (0.5) up; rows 0..15 of 16, 0.0875 m each.
+        uvs, values = square(1.6, 0.2, torso=1.0)
+        rgba, _ = base_layer(uvs, values, 16, self.PLANES, COLOURS)
+        return uvs, values, rgba
+
+    def test_finds_none_where_the_base_layer_covers_the_trunk(self):
+        uvs, values, rgba = self.layer()
+        self.assertEqual(coverage_gaps(rgba, uvs, values, self.PLANES, margin=0.1).shape, (0, 2))
+
+    def test_finds_a_hole_in_the_trunk_between_the_hem_and_the_armholes(self):
+        uvs, values, rgba = self.layer()
+        rgba[6, 9, 3] = 0  # z 1.6 - 6.5 x 0.0875 = 1.03
+        rgba[7, 2, 3] = 254
+        np.testing.assert_array_equal(
+            coverage_gaps(rgba, uvs, values, self.PLANES, margin=0.1), [[6, 9], [7, 2]]
+        )
+
+    def test_ignores_holes_above_the_armholes_bottom_below_the_margin_or_off_the_trunk(self):
+        uvs, values, rgba = self.layer()
+        rgba[3, 4, 3] = 0  # z 1.29: above the armholes' bottom
+        rgba[12, 4, 3] = 0  # z 0.51: within the margin above the hem
+        np.testing.assert_array_equal(coverage_gaps(rgba, uvs, values, self.PLANES, margin=0.1).shape, (0, 2))
+        # Where the trunk membership is below 0.5 nothing is required.
+        uvs, values = square(1.6, 0.2, torso=0.4)
+        rgba = np.zeros((16, 16, 4), dtype=np.uint8)
+        self.assertEqual(coverage_gaps(rgba, uvs, values, self.PLANES, margin=0.1).shape, (0, 2))
 
 
 class WidenIntoTest(unittest.TestCase):

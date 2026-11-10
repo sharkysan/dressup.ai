@@ -34,6 +34,7 @@ from bake import (  # noqa: E402
     anchored,
     base_layer,
     classify_regions,
+    coverage_gaps,
     darken,
     disc_weights,
     face_regions,
@@ -219,6 +220,9 @@ NECKLINE_BELOW_M = 0.01
 STRAP_INSIDE_SHOULDER_M = 0.03
 ARMHOLE_WIDTH_M = 0.06
 ARMHOLE_DEPTH_M = 0.09
+# The base layer must cover every texel of the trunk (spec §3) from COVERAGE_ABOVE_HEM_M above the shorts'
+# hem, where the shorts' antialiased edge ends, up to the armholes' bottom; the build fails otherwise.
+COVERAGE_ABOVE_HEM_M = 0.01
 # Pixels each map grows every UV island by into the texels no face covers, so that a sample on a UV seam
 # (the back's midline, the crotch) blends the island with itself, not with what lies outside it: without
 # it, filtering draws a line of skin down the back of the undershirt and shorts. 8 px of 2048² holds down
@@ -695,7 +699,8 @@ def bake_maps(contract, body, rig, work):
     takes its dominant bone's region, each face its vertices' majority (bake.py). <work>/baselayer.png
     (undershirt and shorts, BASE_LAYER_SIZE² RGBA), classified per supersample from each vertex's x and
     height and its torso, pelvis, thigh, neck and upper-arm membership, interpolated over the faces, and
-    filtered within each UV island (bake.base_layer). And
+    filtered within each UV island (bake.base_layer); the build fails if it leaves any trunk texel from
+    COVERAGE_ABOVE_HEM_M above the hem up to the armholes' bottom less than opaque (bake.coverage_gaps). And
     <work>/coverage.png (R = 255 where a face covers the texel, BASE_LAYER_SIZE², the Skin texture's
     size): build-base.ts neutralises the skin on those texels only, not on the UV gutter."""
     if contract["regions"] != REGION_CODES:
@@ -730,14 +735,22 @@ def bake_maps(contract, body, rig, work):
     per_vertex = np.column_stack([coords[:, 0], coords[:, 2], *(membership(weights, r) for r in worn_over)])
     colours = {UNDERSHIRT: UNDERSHIRT_RGB, SHORTS: SHORTS_RGB}
     islands = uv_islands(faces, uvs)
-    layer, covered = base_layer(
-        uvs, [per_vertex[face] for face in faces], BASE_LAYER_SIZE, planes, colours, islands
-    )
+    corner_values = [per_vertex[face] for face in faces]
+    layer, covered = base_layer(uvs, corner_values, BASE_LAYER_SIZE, planes, colours, islands)
     alpha = layer[..., 3]
     print(
         f"build_base: base layer texels: {np.count_nonzero(alpha == 255)} clothed, "
         f"{np.count_nonzero((alpha > 0) & (alpha < 255))} antialiased; {islands.max() + 1} UV islands"
     )
+    gaps = coverage_gaps(layer, uvs, corner_values, planes, COVERAGE_ABOVE_HEM_M)
+    low = planes["hem_z"] + COVERAGE_ABOVE_HEM_M
+    high = planes["armhole"]["curve_z"] - planes["armhole"]["depth"]
+    if len(gaps) > 0:
+        raise RuntimeError(
+            f"the base layer leaves {len(gaps)} trunk texels from z {low:.3f} to {high:.3f} m not fully "
+            f"covered (spec §3), e.g. (row, column) {gaps[:5].tolist()}"
+        )
+    print(f"build_base: base layer covers every trunk texel from z {low:.3f} to {high:.3f} m: OK")
     layer = widen_into(layer, covered, MAP_MARGIN_PX[BASE_LAYER_SIZE])
     (work / "baselayer.png").write_bytes(png_bytes(layer))
 

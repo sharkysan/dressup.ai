@@ -196,25 +196,32 @@ def in_armholes(x, z, strap_x, curve_z, width, depth):
     return (out > 0) & (down < 1) & ((down <= 0) | (out >= 1) | ((out - 1) ** 2 + down**2 < 1))
 
 
-def garments(x, z, torso, pelvis, thigh, neck, arm, hem_z, waist_z, neck_z, armhole):
-    """Each point's base-layer garment (UNDERSHIRT, SHORTS or 0), from its position (x, z) and its soft
-    membership (summed vertex-group weights) of the torso, the pelvis, the thighs, the neck and the upper
-    arms. The trunk is clothed where its membership is at least 0.5: torso plus pelvis, plus thigh at or
-    above the shorts' hem, neck at or below the neckline and upper arm outside the armholes
-    (in_armholes(x, z, **armhole)), so that those planes and the armholes' edges, not the weights where the
-    torso shades into the thighs, the neck and the arms, draw the hem, the neckline and the armholes. The
-    waist plane alone splits the trunk into the undershirt (waist_z up to neck_z) and the shorts (below
-    waist_z), so no skin can show between the two."""
+def trunk_membership(x, z, torso, pelvis, thigh, neck, arm, hem_z, neck_z, armhole):
+    """Each point's trunk membership, from its position (x, z) and its soft membership (summed
+    vertex-group weights) of the torso, the pelvis, the thighs, the neck and the upper arms: torso plus
+    pelvis, plus thigh at or above the shorts' hem, neck at or below the neckline and upper arm outside
+    the armholes (in_armholes(x, z, **armhole))."""
     z = np.asarray(z)
-    armholes = in_armholes(x, z, **armhole)
-    trunk = (
+    return (
         np.asarray(torso)
         + np.asarray(pelvis)
         + np.where(z >= hem_z, thigh, 0.0)
         + np.where(z <= neck_z, neck, 0.0)
-        + np.where(armholes, 0.0, arm)
+        + np.where(in_armholes(x, z, **armhole), 0.0, arm)
     )
-    clothed = (trunk >= 0.5) & ~armholes
+
+
+def garments(x, z, torso, pelvis, thigh, neck, arm, hem_z, waist_z, neck_z, armhole):
+    """Each point's base-layer garment (UNDERSHIRT, SHORTS or 0), from its position (x, z) and its soft
+    membership of the torso, the pelvis, the thighs, the neck and the upper arms. The trunk is clothed
+    where its membership (trunk_membership) is at least 0.5, outside the armholes, so that the hem and
+    neckline planes and the armholes' edges, not the weights where the torso shades into the thighs, the
+    neck and the arms, draw the hem, the neckline and the armholes. The waist plane alone splits the
+    trunk into the undershirt (waist_z up to neck_z) and the shorts (below waist_z), so no skin can show
+    between the two."""
+    z = np.asarray(z)
+    trunk = trunk_membership(x, z, torso, pelvis, thigh, neck, arm, hem_z, neck_z, armhole)
+    clothed = (trunk >= 0.5) & ~in_armholes(x, z, **armhole)
     out = np.zeros(z.shape, dtype=np.uint8)
     out[clothed & (z < waist_z)] = SHORTS
     out[clothed & (z >= waist_z) & (z <= neck_z)] = UNDERSHIRT
@@ -335,6 +342,34 @@ def base_layer(uv_faces, corner_values, size, planes, colours, islands=None, sam
         rgba[top:bottom] = np.round(np.concatenate([rgb, alpha[..., np.newaxis]], axis=-1))
         covered[top:bottom] = own >= 0
     return rgba, covered
+
+
+def coverage_gaps(rgba, uv_faces, corner_values, planes, margin):
+    """The base layer's gaps in the trunk (spec §3): the texels of rgba (base_layer's, with uv_faces,
+    corner_values and planes as it took them) whose centre lies in a face, whose trunk membership
+    (trunk_membership, interpolated there) is at least 0.5 and whose height is from `margin` above the
+    shorts' hem up to the armholes' bottom, but whose alpha is below 255. Returns their (row, column)
+    pairs, (K, 2); empty if the base layer covers the trunk there everywhere."""
+    size = rgba.shape[0]
+    armhole = planes["armhole"]
+    low, high = planes["hem_z"] + margin, armhole["curve_z"] - armhole["depth"]
+    spans = np.array([[min(p[1] for p in polygon), max(p[1] for p in polygon)] for polygon in uv_faces])
+    spans = spans * size - 0.5
+    gaps = [np.empty((0, 2), dtype=np.int64)]
+    for top in range(0, size, BAND_ROWS):
+        bottom = min(top + BAND_ROWS, size)
+        near = np.flatnonzero((spans[:, 1] >= top) & (spans[:, 0] < bottom))
+        if len(near) == 0:
+            continue
+        values, inside = interpolate(
+            [uv_faces[i] for i in near], [corner_values[i] for i in near], size, rows=(top, bottom)
+        )
+        x, z, *members = np.moveaxis(values, -1, 0)
+        trunk = trunk_membership(x, z, *members, planes["hem_z"], planes["neck_z"], armhole)
+        must = inside & (trunk >= 0.5) & (z >= low) & (z <= high)
+        rows, columns = np.nonzero(must & (rgba[top:bottom, :, 3] < 255))
+        gaps.append(np.column_stack([rows + top, columns]))
+    return np.concatenate(gaps)
 
 
 def widen(image, steps):
