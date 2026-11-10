@@ -186,43 +186,107 @@ UNDERSHIRT = 1
 SHORTS = 2
 
 
-def garments(z, torso, pelvis, thigh, neck, hem_z, waist_z, neck_z):
-    """Each point's base-layer garment (UNDERSHIRT, SHORTS or 0), from its height z and its soft
-    membership (summed vertex-group weights) of the torso, the pelvis, the thighs and the neck. The trunk
-    is clothed where its membership is at least 0.5: torso plus pelvis, plus thigh at or above the shorts'
-    hem and neck at or below the neckline, so that those planes, not the weights where the torso shades
-    into the thighs and the neck, draw the hem and the neckline. The waist plane alone splits the trunk
-    into the undershirt (waist_z up to neck_z) and the shorts (below waist_z), so no skin can show between
-    the two."""
+def in_armholes(x, z, strap_x, curve_z, width, depth):
+    """True for each point (x, z) in an armhole of the undershirt. Seen from the front (along y), each
+    armhole's edge runs straight down at |x| = strap_x, the outer edge of the shoulder strap, to curve_z;
+    from there a quarter ellipse curves it out and down to |x| = strap_x + width at curve_z - depth, where
+    it runs level under the arm. The armhole is the side of that edge away from the body's midline."""
+    out = (np.abs(x) - strap_x) / width
+    down = (curve_z - np.asarray(z)) / depth
+    return (out > 0) & (down < 1) & ((down <= 0) | (out >= 1) | ((out - 1) ** 2 + down**2 < 1))
+
+
+def garments(x, z, torso, pelvis, thigh, neck, arm, hem_z, waist_z, neck_z, armhole):
+    """Each point's base-layer garment (UNDERSHIRT, SHORTS or 0), from its position (x, z) and its soft
+    membership (summed vertex-group weights) of the torso, the pelvis, the thighs, the neck and the upper
+    arms. The trunk is clothed where its membership is at least 0.5: torso plus pelvis, plus thigh at or
+    above the shorts' hem, neck at or below the neckline and upper arm outside the armholes
+    (in_armholes(x, z, **armhole)), so that those planes and the armholes' edges, not the weights where the
+    torso shades into the thighs, the neck and the arms, draw the hem, the neckline and the armholes. The
+    waist plane alone splits the trunk into the undershirt (waist_z up to neck_z) and the shorts (below
+    waist_z), so no skin can show between the two."""
     z = np.asarray(z)
+    armholes = in_armholes(x, z, **armhole)
     trunk = (
         np.asarray(torso)
         + np.asarray(pelvis)
         + np.where(z >= hem_z, thigh, 0.0)
         + np.where(z <= neck_z, neck, 0.0)
+        + np.where(armholes, 0.0, arm)
     )
-    clothed = trunk >= 0.5
+    clothed = (trunk >= 0.5) & ~armholes
     out = np.zeros(z.shape, dtype=np.uint8)
     out[clothed & (z < waist_z)] = SHORTS
     out[clothed & (z >= waist_z) & (z <= neck_z)] = UNDERSHIRT
     return out
 
 
+def waist_plane(spine_02, midlines, most):
+    """(the base layer's waist height, the pelvis weight there on each midline): the waist lies midway along
+    the spine_02 bone (spine_02 = (head z, tail z)), whose joints MakeHuman fits to the mesh. midlines holds
+    a (z, pelvis weight) pair of arrays per midline (the front's and the back's); on each, the pelvis weight
+    interpolated at the waist must be above 0 and at most `most`, i.e. the waist lies at the top of the
+    pelvis vertex group, where its weight fades out. Raises ValueError otherwise."""
+    waist = float(np.mean(spine_02))
+    weights = []
+    for z, weight in midlines:
+        order = np.argsort(z)
+        weights.append(float(np.interp(waist, np.asarray(z)[order], np.asarray(weight)[order])))
+        if not 0 < weights[-1] <= most:
+            raise ValueError(
+                f"waist at z {waist:.3f} m: midline pelvis weight {weights[-1]:.3f} is not in (0, {most}]"
+            )
+    return waist, weights
+
+
+def uv_islands(faces, uv_faces):
+    """Each face's UV island, numbered 0, 1, ...: faces are on one island where they share a corner, the
+    same vertex at the same UV, directly or through other faces. faces holds each face's vertex indices,
+    uv_faces its corners' UVs."""
+    parent = list(range(len(faces)))
+
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    first = {}
+    for face, (vertices, uvs) in enumerate(zip(faces, uv_faces, strict=True)):
+        for vertex, (u, v) in zip(vertices, uvs, strict=True):
+            other = first.setdefault((int(vertex), float(u), float(v)), face)
+            parent[root(face)] = root(other)
+    return np.unique([root(face) for face in range(len(faces))], return_inverse=True)[1]
+
+
 # Each base-layer texel is classified at SUPERSAMPLES x SUPERSAMPLES points, which base_layer rasterises
-# BAND_ROWS texel rows at a time (512 x 8192 samples of 5 float32 values: 84 MB a band at 2048²).
+# BAND_ROWS texel rows at a time, plus a texel row above and below for the filter (520 x 8192 samples of 8
+# float32 values: 136 MB a band at 2048²).
 SUPERSAMPLES = 4
 BAND_ROWS = 128
 
 
-def base_layer(uv_faces, corner_values, size, planes, colours, samples=SUPERSAMPLES):
+def tent_weights(samples):
+    """(3, samples): the weight of each sample row (or column) of the texels above, at and below a texel
+    (left of, at and right of it) in a tent filter one texel in radius, centred on that texel."""
+    offsets = np.arange(-1, 2)[:, np.newaxis] + (np.arange(samples) + 0.5) / samples - 0.5
+    return np.maximum(0.0, 1.0 - np.abs(offsets))
+
+
+def base_layer(uv_faces, corner_values, size, planes, colours, islands=None, samples=SUPERSAMPLES):
     """The base layer in the faces' UV layout, antialiased: ((size, size, 4) uint8 straight-alpha RGBA,
-    (size, size) bool covered). corner_values holds one (corners, 5) array per face: each corner's z,
-    torso, pelvis, thigh and neck, as garments() takes them with planes = {hem_z, waist_z, neck_z};
-    colours maps each garment to its RGB. A texel is sampled samples x samples times; its samples inside
-    a face are interpolated and classified one by one. Its alpha is the share of those that are clothed,
-    its colour their garments' mean: a garment's edge blends over about a texel, while an island's own
-    edge stays opaque. A texel with no sample inside a face is 0 and not covered."""
+    (size, size) bool covered). corner_values holds one (corners, 7) array per face: each corner's x, z,
+    torso, pelvis, thigh, neck and upper-arm membership, as garments() takes them with planes = {hem_z,
+    waist_z, neck_z, armhole}; colours maps each garment to its RGB; islands gives each face's UV island
+    (uv_islands; one island if None). A texel is covered if any of its samples x samples samples lies in a
+    face; samples in a face are interpolated and classified one by one. A covered texel weighs the samples
+    of its own island within a texel of its centre by a tent filter (tent_weights): its alpha is the
+    clothed share of that weight, its colour the weighted mean of their garments. A garment's edge thus
+    ramps over about two texels, smooth when a texture is magnified, while an island's own edge stays
+    opaque and never blends with a neighbouring island. A texel not covered is 0."""
     fine = size * samples
+    islands = np.zeros(len(uv_faces)) if islands is None else np.asarray(islands)
+    tent = tent_weights(samples)
     rgba = np.zeros((size, size, 4), dtype=np.uint8)
     covered = np.zeros((size, size), dtype=bool)
     # Each face's span of sample rows, so that each band rasterises only the faces that reach into it.
@@ -230,26 +294,46 @@ def base_layer(uv_faces, corner_values, size, planes, colours, samples=SUPERSAMP
     spans = spans * fine - 0.5
     for top in range(0, size, BAND_ROWS):
         bottom = min(top + BAND_ROWS, size)
-        start, stop = top * samples, bottom * samples
+        above, below = max(top - 1, 0), min(bottom + 1, size)
+        start, stop = above * samples, below * samples
         near = np.flatnonzero((spans[:, 1] >= start) & (spans[:, 0] < stop))
         if len(near) == 0:
             continue
         values, inside = interpolate(
-            [uv_faces[i] for i in near], [corner_values[i] for i in near], fine, rows=(start, stop)
+            [uv_faces[i] for i in near],
+            [np.column_stack([corner_values[i], np.full(len(corner_values[i]), islands[i])]) for i in near],
+            fine,
+            rows=(start, stop),
         )
-        kinds = np.where(inside, garments(*np.moveaxis(values, -1, 0), **planes), 0)
+        *channels, island = np.moveaxis(values, -1, 0)
+        kinds = np.where(inside, garments(*channels, **planes), 0)
+        island = np.where(inside, np.round(island).astype(np.int64), -1)
 
-        def per_texel(mask, rows=bottom - top):
-            return mask.reshape(rows, samples, size, samples).sum(axis=(1, 3))
+        # Samples as (texel row, sample row, texel column, sample column), with a texel of no island
+        # around them; the band's own texels start at texel row `first`.
+        def blocks(per_sample, fill):
+            shaped = per_sample.reshape(below - above, samples, size, samples)
+            return np.pad(shaped, ((1, 1), (0, 0), (1, 1), (0, 0)), constant_values=fill)
 
-        counts = {garment: per_texel(kinds == garment) for garment in colours}
-        clothed = sum(counts.values())
-        hits = per_texel(inside)
-        rgb = sum(counts[g][..., np.newaxis] * np.asarray(colours[g], dtype=np.float64) for g in colours)
-        rgb /= np.maximum(clothed, 1)[..., np.newaxis]
-        alpha = 255 * clothed / np.maximum(hits, 1)
+        island, kinds = blocks(island, -1), blocks(kinds, 0)
+        rows, first = bottom - top, top - above + 1
+        own = island[first : first + rows, :, 1 : size + 1].max(axis=(1, 3))
+        weight = np.zeros((rows, size))
+        shares = {garment: np.zeros((rows, size)) for garment in colours}
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                kernel = np.outer(tent[dy + 1], tent[dx + 1])
+                window = (slice(first + dy, first + dy + rows), slice(None), slice(1 + dx, 1 + dx + size))
+                same = (island[window] == own[:, np.newaxis, :, np.newaxis]) & (own >= 0)[:, None, :, None]
+                weight += np.einsum("rscd,sd->rc", same, kernel)
+                for garment in colours:
+                    shares[garment] += np.einsum("rscd,sd->rc", same & (kinds[window] == garment), kernel)
+        clothed = sum(shares.values())
+        rgb = sum(shares[g][..., np.newaxis] * np.asarray(colours[g], dtype=np.float64) for g in colours)
+        rgb /= np.maximum(clothed, 1e-12)[..., np.newaxis]
+        alpha = 255 * clothed / np.maximum(weight, 1e-12)
         rgba[top:bottom] = np.round(np.concatenate([rgb, alpha[..., np.newaxis]], axis=-1))
-        covered[top:bottom] = hits > 0
+        covered[top:bottom] = own >= 0
     return rgba, covered
 
 

@@ -43,6 +43,8 @@ from bake import (  # noqa: E402
     png_bytes,
     rasterise,
     smooth_patch,
+    uv_islands,
+    waist_plane,
     widen,
     widen_into,
 )
@@ -198,16 +200,24 @@ REGIONS_SIZE = 1024
 # in the pelvis vertex group; midline vertices are within MIDLINE_M of x = 0.
 HEM_BELOW_CROTCH_M = 0.08
 MIDLINE_M = 1e-4
-# The base layer's waist, where the undershirt meets the shorts: the top of the pelvis vertex group on
-# the front midline, the highest front-midline vertex whose pelvis weight is still WAIST_PELVIS_WEIGHT (the
-# weight fades out over the belly; > 0 it reaches the lower ribs). On the base that is 1.008 m, the ring
-# just above the navel (0.948 to 0.990 m): the weight morph lifts the belly below the navel by up to 9 mm,
-# which would bend a waist line there into a peak.
-WAIST_PELVIS_WEIGHT = 0.05
+# The base layer's waist, where the undershirt meets the shorts (bake.waist_plane): midway along the
+# spine_02 bone, 1.006 m on the base, above the navel (0.948 to 0.990 m; the weight morph lifts the belly
+# below the navel by up to 9 mm, which would bend a waist line there into a peak). The build fails unless
+# that is the top of the pelvis vertex group, where the pelvis weight on the front and back midlines has
+# faded to between 0 and WAIST_PELVIS_MAX.
+WAIST_PELVIS_MAX = 0.1
 # The undershirt's neckline: NECKLINE_BELOW_M below the lowest front-midline vertex whose neck weight
 # (neck_01 + head: on the front, the head's weight comes in before neck_01's alone reaches 0.5) is at
 # least 0.5.
 NECKLINE_BELOW_M = 0.01
+# The undershirt's armholes (bake.in_armholes), from the shoulder joints (the upper arms' heads): seen from
+# the front, each runs straight down STRAP_INSIDE_SHOULDER_M inside the joint, the shoulder strap's outer
+# edge, to the joint's height, then curves out ARMHOLE_WIDTH_M to a level bottom ARMHOLE_DEPTH_M below the
+# joint, under the armpit. The upper arms' weights over the shoulders, which shade into the torso's over
+# large faces, would draw a jagged edge.
+STRAP_INSIDE_SHOULDER_M = 0.03
+ARMHOLE_WIDTH_M = 0.06
+ARMHOLE_DEPTH_M = 0.09
 # Pixels each map grows every UV island by into the texels no face covers, so that a sample on a UV seam
 # (the back's midline, the crotch) blends the island with itself, not with what lies outside it: without
 # it, filtering draws a line of skin down the back of the undershirt and shorts. 8 px of 2048² holds down
@@ -636,32 +646,55 @@ def membership(weights, region):
     return sum(column for name, column in weights.items() if REGION_OF_GROUP.get(name) == region)
 
 
-def base_layer_planes(weights, coords, hem_z):
-    """The heights that bound the base layer's garments ({hem_z, waist_z, neck_z}, bake.garments), from the
-    Body's front midline (WAIST_PELVIS_WEIGHT, NECKLINE_BELOW_M)."""
+def joint(rig, bone, end="head"):
+    """A rig bone's head or tail in world space, as a (3,) array."""
+    return np.array(rig.matrix_world @ getattr(rig.data.bones[bone], f"{end}_local"))
+
+
+def base_layer_planes(weights, coords, hem_z, rig):
+    """The base layer's planes and armholes ({hem_z, waist_z, neck_z, armhole}, bake.garments), from the
+    rig's joints and the Body's midlines (WAIST_PELVIS_MAX, NECKLINE_BELOW_M, STRAP_INSIDE_SHOULDER_M,
+    ARMHOLE_WIDTH_M, ARMHOLE_DEPTH_M). The front is the way the feet point."""
     x, y, z = coords.T
+    front = np.sign((joint(rig, "foot_l", "tail") - joint(rig, "foot_l"))[1])  # MakeHuman faces -y
+    if front == 0:
+        raise RuntimeError("the left foot points neither forward nor back")
     midline = np.abs(x) <= MIDLINE_M
-    front = midline & (y < 0)  # MakeHuman faces -y
-    waist = z[front & (weights["pelvis"] >= WAIST_PELVIS_WEIGHT)]
-    neck = z[front & (weights["neck_01"] + weights["head"] >= 0.5)]
-    if len(waist) == 0 or len(neck) == 0:
-        raise RuntimeError("the Body's front midline has no pelvis-weighted or no neck-weighted vertex")
-    planes = {"hem_z": hem_z, "waist_z": float(waist.max()), "neck_z": float(neck.min() - NECKLINE_BELOW_M)}
-    if not planes["hem_z"] < planes["waist_z"] < planes["neck_z"]:
-        raise RuntimeError(f"base-layer planes out of order: {planes}")
-    print(
-        f"build_base: base layer waist at z {planes['waist_z']:.3f} m (top of pelvis weight "
-        f">= {WAIST_PELVIS_WEIGHT} on the front midline), neckline at z {planes['neck_z']:.3f} m "
-        f"(front-midline neck weight 0.5 at {neck.min():.3f} m)"
+    midlines = {"front": midline & (y * front > 0), "back": midline & (y * front < 0)}
+    spine_02 = (joint(rig, "spine_02")[2], joint(rig, "spine_02", "tail")[2])
+    waist_z, pelvis = waist_plane(
+        spine_02, [(z[side], weights["pelvis"][side]) for side in midlines.values()], WAIST_PELVIS_MAX
     )
-    return planes
+    neck = z[midlines["front"] & (weights["neck_01"] + weights["head"] >= 0.5)]
+    if len(neck) == 0:
+        raise RuntimeError("the Body's front midline has no neck-weighted vertex")
+    shoulders = np.array([joint(rig, "upperarm_l"), joint(rig, "upperarm_r")])
+    shoulder_x, shoulder_z = np.abs(shoulders[:, 0]).mean(), shoulders[:, 2].mean()
+    armhole = {
+        "strap_x": float(shoulder_x - STRAP_INSIDE_SHOULDER_M),
+        "curve_z": float(shoulder_z),
+        "width": ARMHOLE_WIDTH_M,
+        "depth": ARMHOLE_DEPTH_M,
+    }
+    planes = {"hem_z": hem_z, "waist_z": waist_z, "neck_z": float(neck.min() - NECKLINE_BELOW_M)}
+    if not planes["hem_z"] < planes["waist_z"] < armhole["curve_z"] - ARMHOLE_DEPTH_M < planes["neck_z"]:
+        raise RuntimeError(f"base-layer planes out of order: {planes}, armholes {armhole}")
+    print(
+        f"build_base: base layer waist at z {waist_z:.3f} m (midway along spine_02; midline pelvis weight "
+        f"there front {pelvis[0]:.3f}, back {pelvis[1]:.3f}), neckline at z {planes['neck_z']:.3f} m "
+        f"(front-midline neck weight 0.5 at {neck.min():.3f} m); armholes from the shoulder joints "
+        f"(|x| {shoulder_x:.3f} m, z {shoulder_z:.3f} m): strap edge at |x| {armhole['strap_x']:.3f} m, "
+        f"level bottom at z {shoulder_z - ARMHOLE_DEPTH_M:.3f} m"
+    )
+    return planes | {"armhole": armhole}
 
 
 def bake_maps(contract, body, rig, work):
     """Writes <work>/regions.png (R = region code, REGIONS_SIZE²) in the Body's UV layout: each vertex
     takes its dominant bone's region, each face its vertices' majority (bake.py). <work>/baselayer.png
-    (undershirt and shorts, BASE_LAYER_SIZE² RGBA), classified per supersample from each vertex's height
-    and torso, pelvis, thigh and neck membership, interpolated over the faces (bake.base_layer). And
+    (undershirt and shorts, BASE_LAYER_SIZE² RGBA), classified per supersample from each vertex's x and
+    height and its torso, pelvis, thigh, neck and upper-arm membership, interpolated over the faces, and
+    filtered within each UV island (bake.base_layer). And
     <work>/coverage.png (R = 255 where a face covers the texel, BASE_LAYER_SIZE², the Skin texture's
     size): build-base.ts neutralises the skin on those texels only, not on the UV gutter."""
     if contract["regions"] != REGION_CODES:
@@ -691,16 +724,18 @@ def bake_maps(contract, body, rig, work):
     regions[..., 0] = region_map(REGIONS_SIZE)
     (work / "regions.png").write_bytes(png_bytes(regions))
 
-    planes = base_layer_planes(weights, coords, hem_z)
-    per_vertex = np.column_stack(
-        [coords[:, 2], *(membership(weights, region) for region in ("torso", "pelvis", "thighs", "neck"))]
-    )
+    planes = base_layer_planes(weights, coords, hem_z, rig)
+    worn_over = ("torso", "pelvis", "thighs", "neck", "upperArms")
+    per_vertex = np.column_stack([coords[:, 0], coords[:, 2], *(membership(weights, r) for r in worn_over)])
     colours = {UNDERSHIRT: UNDERSHIRT_RGB, SHORTS: SHORTS_RGB}
-    layer, covered = base_layer(uvs, [per_vertex[face] for face in faces], BASE_LAYER_SIZE, planes, colours)
+    islands = uv_islands(faces, uvs)
+    layer, covered = base_layer(
+        uvs, [per_vertex[face] for face in faces], BASE_LAYER_SIZE, planes, colours, islands
+    )
     alpha = layer[..., 3]
     print(
         f"build_base: base layer texels: {np.count_nonzero(alpha == 255)} clothed, "
-        f"{np.count_nonzero((alpha > 0) & (alpha < 255))} antialiased"
+        f"{np.count_nonzero((alpha > 0) & (alpha < 255))} antialiased; {islands.max() + 1} UV islands"
     )
     layer = widen_into(layer, covered, MAP_MARGIN_PX[BASE_LAYER_SIZE])
     (work / "baselayer.png").write_bytes(png_bytes(layer))

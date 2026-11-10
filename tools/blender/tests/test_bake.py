@@ -6,6 +6,7 @@ import zlib
 
 import numpy as np
 
+import bake
 from bake import (
     SHORTS,
     UNDERSHIRT,
@@ -18,11 +19,15 @@ from bake import (
     garments,
     head_mask,
     height_and_min,
+    in_armholes,
     interpolate,
     masked_delta,
     png_bytes,
     rasterise,
     smooth_patch,
+    tent_weights,
+    uv_islands,
+    waist_plane,
     widen,
     widen_into,
 )
@@ -155,17 +160,42 @@ class InterpolateTest(unittest.TestCase):
         np.testing.assert_array_equal(values[~covered], 0)
 
 
-# Planes for the garment tests: hem 0.5, waist 1, neck 2 (metres).
-PLANES = {"hem_z": 0.5, "waist_z": 1.0, "neck_z": 2.0}
+# Planes for the garment tests: hem 0.5, waist 1, neck 2 (metres); the armholes far out of the way.
+PLANES = {
+    "hem_z": 0.5,
+    "waist_z": 1.0,
+    "neck_z": 2.0,
+    "armhole": {"strap_x": 10.0, "curve_z": 1.5, "width": 1.0, "depth": 0.5},
+}
 COLOURS = {UNDERSHIRT: (0xE9, 0xE6, 0xE1), SHORTS: (0x2F, 0x2F, 0x33)}
 
 
-def square(z_top, z_bottom, torso=0.0, pelvis=0.0, thigh=0.0, neck=0.0):
-    """One quad over the whole image with (z, torso, pelvis, thigh, neck) per corner: z is z_top along the
-    top edge and z_bottom along the bottom one."""
-    corners = np.array([(0, 0), (1, 0), (1, 1), (0, 1)], dtype=np.float64)
-    values = np.array([[z, torso, pelvis, thigh, neck] for z in (z_top, z_top, z_bottom, z_bottom)])
+def square(z_top, z_bottom, torso=0.0, pelvis=0.0, thigh=0.0, neck=0.0, arm=0.0, u=(0, 1)):
+    """One quad over the image's columns u (all rows) with (x, z, torso, pelvis, thigh, neck, arm) per
+    corner: x is 0, z is z_top along the top edge and z_bottom along the bottom one."""
+    corners = np.array([(u[0], 0), (u[1], 0), (u[1], 1), (u[0], 1)], dtype=np.float64)
+    values = np.array([[0, z, torso, pelvis, thigh, neck, arm] for z in (z_top, z_top, z_bottom, z_bottom)])
     return [corners], [values]
+
+
+def zeros(n):
+    return np.zeros(n)
+
+
+class InArmholesTest(unittest.TestCase):
+    ARMHOLE = {"strap_x": 0.1, "curve_z": 1.3, "width": 0.06, "depth": 0.09}
+
+    def test_runs_straight_down_the_shoulder_straps_outer_edge_to_curve_z_on_both_sides(self):
+        x = np.array([0.099, 0.101, -0.099, -0.101, 0.099, 0.101])
+        z = np.array([1.35, 1.35, 1.35, 1.35, 1.3, 1.3])
+        np.testing.assert_array_equal(in_armholes(x, z, **self.ARMHOLE), [0, 1, 0, 1, 0, 1])
+
+    def test_then_curves_out_along_a_quarter_ellipse_to_a_level_bottom_under_the_arm(self):
+        # The edge 60° round the ellipse is at |x| 0.13, z 1.3 - 0.09 sin 60°; the bottom is z 1.21.
+        z_edge = 1.3 - 0.09 * np.sin(np.pi / 3)
+        x = np.array([0.128, 0.132, -0.132, 0.2, 0.2, 0.16])
+        z = np.array([z_edge, z_edge, z_edge, 1.211, 1.209, 1.209])
+        np.testing.assert_array_equal(in_armholes(x, z, **self.ARMHOLE), [0, 1, 1, 1, 0, 0])
 
 
 class GarmentsTest(unittest.TestCase):
@@ -173,7 +203,8 @@ class GarmentsTest(unittest.TestCase):
         z = np.array([0.6, 0.5, 0.4, 0.6])
         thigh = np.array([1.0, 0.5, 1.0, 0.4])
         np.testing.assert_array_equal(
-            garments(z, np.zeros(4), np.zeros(4), thigh, np.zeros(4), **PLANES), [SHORTS, SHORTS, 0, 0]
+            garments(zeros(4), z, zeros(4), zeros(4), thigh, zeros(4), zeros(4), **PLANES),
+            [SHORTS, SHORTS, 0, 0],
         )
 
     def test_the_waist_plane_splits_the_trunk_so_nothing_shows_between_undershirt_and_shorts(self):
@@ -182,7 +213,7 @@ class GarmentsTest(unittest.TestCase):
         torso = np.array([0.6, 0.6, 1.0, 0.0, 1.0])
         pelvis = np.array([0.4, 0.0, 0.0, 0.9, 0.0])
         np.testing.assert_array_equal(
-            garments(z, torso, pelvis, np.zeros(5), np.zeros(5), **PLANES),
+            garments(zeros(5), z, torso, pelvis, zeros(5), zeros(5), zeros(5), **PLANES),
             [SHORTS, UNDERSHIRT, UNDERSHIRT, SHORTS, 0],
         )
 
@@ -192,7 +223,57 @@ class GarmentsTest(unittest.TestCase):
         torso = np.array([0.3, 0.2, 0.3, 0.6])
         neck = np.array([0.7, 0.8, 0.7, 0.4])
         np.testing.assert_array_equal(
-            garments(z, torso, np.zeros(4), np.zeros(4), neck, **PLANES), [UNDERSHIRT, UNDERSHIRT, 0, 0]
+            garments(zeros(4), z, torso, zeros(4), zeros(4), neck, zeros(4), **PLANES),
+            [UNDERSHIRT, UNDERSHIRT, 0, 0],
+        )
+
+    def test_the_armholes_edge_not_the_weights_draws_the_armhole(self):
+        # Where the torso shades into the upper arm, the arm's weight clothes the shoulder up to the
+        # armhole's edge, and nothing beyond the edge is clothed, however much torso weight it has.
+        planes = PLANES | {"armhole": InArmholesTest.ARMHOLE}
+        x = np.array([0.09, 0.11, 0.11, -0.09])
+        z = np.full(4, 1.32)
+        torso = np.array([0.3, 0.3, 0.8, 0.3])
+        arm = np.array([0.7, 0.7, 0.2, 0.7])
+        np.testing.assert_array_equal(
+            garments(x, z, torso, zeros(4), zeros(4), zeros(4), arm, **planes), [UNDERSHIRT, 0, 0, UNDERSHIRT]
+        )
+
+
+class WaistPlaneTest(unittest.TestCase):
+    # Pelvis weight along the front and back midlines (z out of order, as vertices come).
+    FRONT = (np.array([1.0, 0.9, 1.1]), np.array([0.06, 0.3, 0.0]))
+    BACK = (np.array([0.9, 1.0, 1.1]), np.array([0.2, 0.02, 0.0]))
+
+    def test_is_midway_along_spine_02_where_the_midline_pelvis_weights_fade_out(self):
+        waist, weights = waist_plane((0.96, 1.05), [self.FRONT, self.BACK], most=0.1)
+        self.assertAlmostEqual(waist, 1.005)
+        np.testing.assert_allclose(weights, [0.057, 0.02 * 0.95])
+
+    def test_fails_below_where_the_pelvis_weight_fades_or_above_where_it_ends(self):
+        with self.assertRaisesRegex(ValueError, "pelvis weight 0.252"):
+            waist_plane((0.90, 0.94), [self.FRONT, self.BACK], most=0.1)
+        with self.assertRaisesRegex(ValueError, "pelvis weight 0.000"):
+            waist_plane((1.10, 1.20), [self.FRONT, self.BACK], most=0.1)
+
+
+class UvIslandsTest(unittest.TestCase):
+    def test_joins_faces_that_share_a_vertex_at_the_same_uv_and_no_others(self):
+        faces = [[0, 1, 2, 3], [1, 4, 5, 2], [1, 6, 7, 2], [8, 9, 10, 11]]
+        uvs = [
+            [(0, 0), (0.5, 0), (0.5, 0.5), (0, 0.5)],
+            [(0.5, 0), (1, 0), (1, 0.5), (0.5, 0.5)],  # shares vertices 1 and 2 at their UVs: joined
+            [(0, 0.6), (0.5, 0.6), (0.5, 1), (0, 1)],  # vertices 1 and 2 again, across a seam: apart
+            [(1, 0), (1, 0.4), (0.9, 0.4), (0.9, 0)],  # touches the second face's UVs, no shared vertex
+        ]
+        np.testing.assert_array_equal(uv_islands(faces, uvs), [0, 0, 1, 2])
+
+
+class TentWeightsTest(unittest.TestCase):
+    def test_weighs_samples_by_their_distance_from_the_texels_centre_out_to_a_texel(self):
+        np.testing.assert_allclose(
+            tent_weights(4),
+            [[0, 0, 0.125, 0.375], [0.625, 0.875, 0.875, 0.625], [0.375, 0.125, 0, 0]],
         )
 
 
@@ -215,6 +296,16 @@ class BaseLayerTest(unittest.TestCase):
         np.testing.assert_array_equal(rgba[2, :, :3], np.broadcast_to([0x2F, 0x2F, 0x33], (4, 3)))
         np.testing.assert_array_equal(rgba[3, :, 3], 0)
 
+    def test_ramps_an_edge_on_a_texel_boundary_over_the_texels_either_side(self):
+        # The hem (z = 0.5) runs along the boundary between rows 1 and 2 of 4, v = 0.5: a filter one
+        # texel wide would step from 255 to 0 there; the tent ramps it over both rows.
+        uvs, values = square(0.9, 0.1, thigh=1.0)
+        rgba, _ = base_layer(uvs, values, 4, PLANES, COLOURS)
+        np.testing.assert_array_equal(rgba[0, :, 3], 255)
+        np.testing.assert_array_equal(rgba[1, :, 3], 223)  # 255 x 3.5 / 4
+        np.testing.assert_array_equal(rgba[2, :, 3], 32)  # 255 x 0.5 / 4
+        np.testing.assert_array_equal(rgba[3, :, 3], 0)
+
     def test_blends_undershirt_into_shorts_across_the_waist_and_stays_opaque(self):
         # The waist (z = 1) crosses row 1 of 4 at its middle, v = 0.375.
         uvs, values = square(1.3, 0.5, torso=1.0)
@@ -227,11 +318,35 @@ class BaseLayerTest(unittest.TestCase):
     def test_measures_coverage_over_the_samples_inside_a_face_so_island_edges_stay_opaque(self):
         # A triangle's slanted edge cuts through texels: those it covers in part are still fully shorts.
         triangle = [np.array([(0, 0), (1, 0), (0, 1)], dtype=np.float64)]
-        values = [np.array([[0.9, 0, 0, 1.0, 0]] * 3)]
+        values = [np.array([[0, 0.9, 0, 0, 1.0, 0, 0]] * 3)]
         rgba, covered = base_layer(triangle, values, 4, PLANES, COLOURS)
         np.testing.assert_array_equal(rgba[covered, 3], 255)
         np.testing.assert_array_equal(rgba[~covered, 3], 0)
         self.assertTrue(covered[0, 3] and not covered[3, 3])
+
+    def test_never_blends_an_island_with_the_island_beside_it(self):
+        # Two islands side by side: the left one shorts (thigh above the hem), the right one bare.
+        left_uvs, left = square(0.9, 0.9, thigh=1.0, u=(0, 0.5))
+        right_uvs, right = square(0.1, 0.1, thigh=1.0, u=(0.5, 1))
+        rgba, _ = base_layer(left_uvs + right_uvs, left + right, 8, PLANES, COLOURS, islands=[0, 1])
+        np.testing.assert_array_equal(rgba[:, :4, 3], 255)
+        np.testing.assert_array_equal(rgba[:, 4:, 3], 0)
+        # As one island, the filter would blend them across the join.
+        rgba, _ = base_layer(left_uvs + right_uvs, left + right, 8, PLANES, COLOURS)
+        np.testing.assert_array_equal(rgba[:, 3, 3], 223)
+        np.testing.assert_array_equal(rgba[:, 4, 3], 32)
+
+    def test_renders_in_bands_the_same_as_in_one_piece(self):
+        # Bands of 2 texel rows: each band's filter reaches into the rows of the bands either side.
+        uvs, values = square(0.9, 0.1, thigh=1.0)
+        whole, _ = base_layer(uvs, values, 8, PLANES, COLOURS)
+        original = bake.BAND_ROWS
+        bake.BAND_ROWS = 2
+        try:
+            banded, _ = base_layer(uvs, values, 8, PLANES, COLOURS)
+        finally:
+            bake.BAND_ROWS = original
+        np.testing.assert_array_equal(banded, whole)
 
 
 class WidenIntoTest(unittest.TestCase):
