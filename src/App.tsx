@@ -3,6 +3,7 @@ import { analyzePhoto } from './analysis/analyze';
 import { loadModels } from './analysis/mediapipe';
 import { supportsWebGL2 } from './scene/supportsWebGL2';
 import { Viewer } from './scene/Viewer';
+import { nodeScreenPoint } from './scene/viewerHandle';
 import { useAppStore } from './store/useAppStore';
 import { AnalysisPage } from './ui/dev/AnalysisPage';
 import { isAnalysisRoute, isDevPanelEnabled } from './ui/dev/devFlag';
@@ -16,6 +17,8 @@ declare global {
       store: typeof useAppStore;
       /** Dev/e2e hook into the analysis pipeline (only present with the dev flag). */
       analysis: { analyzePhoto: typeof analyzePhoto; loadModels: typeof loadModels };
+      /** Dev/e2e: a scene node's position in canvas CSS pixels, with the canvas size. */
+      nodeScreenPoint: typeof nodeScreenPoint;
     };
   }
 }
@@ -23,7 +26,13 @@ declare global {
 export default function App() {
   const dev = isDevPanelEnabled();
   useEffect(() => {
-    if (dev) window.__kiss = { store: useAppStore, analysis: { analyzePhoto, loadModels } };
+    if (dev) {
+      window.__kiss = {
+        store: useAppStore,
+        analysis: { analyzePhoto, loadModels },
+        nodeScreenPoint,
+      };
+    }
   }, [dev]);
 
   if (!supportsWebGL2()) {

@@ -46,3 +46,21 @@ export function diffPixels(a: Buffer, b: Buffer, tolerance = 24): number {
   }
   return count;
 }
+
+/** Mean RGB over the (2r+1)^2 patch centred on (cx, cy). */
+export function patchMean(buf: Buffer, cx: number, cy: number, r = 2): [number, number, number] {
+  const png = PNG.sync.read(buf);
+  const sum = [0, 0, 0];
+  let n = 0;
+  for (let y = Math.round(cy) - r; y <= Math.round(cy) + r; y++) {
+    for (let x = Math.round(cx) - r; x <= Math.round(cx) + r; x++) {
+      if (x < 0 || y < 0 || x >= png.width || y >= png.height) continue;
+      const i = (y * png.width + x) * 4;
+      sum[0]! += png.data[i]!;
+      sum[1]! += png.data[i + 1]!;
+      sum[2]! += png.data[i + 2]!;
+      n++;
+    }
+  }
+  return [sum[0]! / n, sum[1]! / n, sum[2]! / n];
+}

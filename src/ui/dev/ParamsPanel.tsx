@@ -1,5 +1,5 @@
 import { EYE_COLORS } from '../../avatar/eyeColors';
-import { defaultParams, type AvatarParams } from '../../catalog/params';
+import { BODY_MORPHS, defaultParams, type AvatarParams } from '../../catalog/params';
 import { useAppStore } from '../../store/useAppStore';
 
 const EXPRESSIONS: AvatarParams['expression'][] = [
@@ -15,6 +15,9 @@ export function ParamsPanel() {
   const params = useAppStore((s) => s.params);
   const catalog = useAppStore((s) => s.catalog);
   const setParams = useAppStore((s) => s.setParams);
+
+  const setBody = (patch: Partial<AvatarParams['body']>) =>
+    setParams({ body: { ...params.body, ...patch } });
 
   const hairOptions = catalog?.hair ?? [];
 
@@ -95,6 +98,31 @@ export function ParamsPanel() {
           ))}
         </select>
       </Row>
+
+      <Row label="Height (cm)">
+        <input
+          data-testid="param-body-heightCm"
+          type="range"
+          min={140}
+          max={210}
+          step={1}
+          value={params.body.heightCm}
+          onChange={(e) => setBody({ heightCm: Number(e.target.value) })}
+        />
+      </Row>
+      {BODY_MORPHS.map((morph) => (
+        <Row key={morph} label={morph}>
+          <input
+            data-testid={`param-body-${morph}`}
+            type="range"
+            min={morph === 'gender' ? 0 : -1}
+            max={1}
+            step={0.05}
+            value={params.body[morph]}
+            onChange={(e) => setBody({ [morph]: Number(e.target.value) })}
+          />
+        </Row>
+      ))}
 
       <button type="button" onClick={() => setParams(defaultParams)} style={{ marginTop: 8 }}>
         Reset
