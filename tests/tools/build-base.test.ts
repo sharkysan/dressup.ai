@@ -279,6 +279,11 @@ describe.skipIf(!fs.existsSync(BUILT))('built hairstyles (public/assets/hair)', 
     }
   });
 
+  test.each(HAIRSTYLES)('%s is matte, not glossy', (id) => {
+    const material = read(id).json.materials.find((m: { name?: string }) => m.name === 'Hair');
+    expect(material.pbrMetallicRoughness.roughnessFactor).toBeGreaterThanOrEqual(0.9);
+  });
+
   test('long01 follows the body: the shoulders or weight morph moves it by more than 1 mm', () => {
     const doc = read('long01');
     const most = Math.max(...moved(doc, 'body_shoulders_max'), ...moved(doc, 'body_weight_max'));

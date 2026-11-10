@@ -11,7 +11,7 @@ import { human } from '../cli';
 import { readGlb, writeGlb } from '../glb/glb';
 import { pruneUnused } from '../glb/prune';
 import { sparsifyMorphTargets } from '../glb/sparsify';
-import { getImage, neutralizeImage, replaceImage, resizeImages } from '../glb/textures';
+import { bleedAlpha, getImage, neutralizeImage, replaceImage, resizeImages } from '../glb/textures';
 import { convertImagesToWebp } from '../glb/webp';
 import { HAIR, HAIR_TEXTURE_SIZE, jointNames, validateHair } from './validateHair';
 import { writeAtomically } from './writeAtomically';
@@ -19,6 +19,7 @@ import { writeAtomically } from './writeAtomically';
 /** Spec §12: each hairstyle ≤1 MiB. */
 export const HAIR_BUDGET_BYTES = 1024 * 1024;
 const WEBP_QUALITY = 90;
+const HAIR_ROUGHNESS = 0.9;
 
 async function processOne(file: string, bones: string[], budget: number): Promise<Uint8Array> {
   let doc = readGlb(new Uint8Array(fs.readFileSync(file)));
@@ -27,11 +28,15 @@ async function processOne(file: string, bones: string[], budget: number): Promis
   const texture = material?.pbrMetallicRoughness?.baseColorTexture?.index;
   if (texture === undefined) throw new Error(`material ${HAIR} has no base-colour texture`);
   const image = doc.json.images[doc.json.textures[texture].source].name;
-  replaceImage(doc, image, neutralizeImage(getImage(doc, image), 'luminance'));
+  // Bled before the resize and the WebP conversion, so the mips and the WebP inherit the edge colour.
+  replaceImage(doc, image, bleedAlpha(neutralizeImage(getImage(doc, image), 'luminance')));
+  // The cards are flat and overlap at the crown: at the exporter's roughness (0.5) their differing normals
+  // read as a glossy, blotchy band. Hair is matte.
+  material.pbrMetallicRoughness.roughnessFactor = HAIR_ROUGHNESS;
   resizeImages(doc, () => HAIR_TEXTURE_SIZE);
   // Within 1e-6 counts as still, as for the base: the Surface Deform capture leaves float noise.
   doc = sparsifyMorphTargets(doc, { epsilon: 1e-6 });
-  if (!(await convertImagesToWebp(doc, WEBP_QUALITY))) {
+  if (!(await convertImagesToWebp(doc, WEBP_QUALITY, { exact: true }))) {
     throw new Error('WebP conversion needs `sharp`');
   }
   doc = pruneUnused(doc);

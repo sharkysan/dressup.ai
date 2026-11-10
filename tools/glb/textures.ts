@@ -99,6 +99,56 @@ export function neutralizeImage(
   return new Uint8Array(PNG.sync.write(img));
 }
 
+/**
+ * Alpha bleed: gives every texel with alpha < 128 the mean RGB of its (8-connected) opaque neighbours,
+ * growing outward one texel per pass, at most `maxIterations` passes; alpha and opaque texels stay as
+ * they are. Filtering, mipmaps and alpha-to-coverage blend the RGB of transparent texels into the edges
+ * of a cutout, so that RGB should be the colour of the edge, not whatever the exporter left there.
+ * Texels beyond the reach of the passes, and an image with nothing to bleed from or to, are kept.
+ */
+export function bleedAlpha(png: Uint8Array, maxIterations = 16): Uint8Array {
+  const img = PNG.sync.read(Buffer.from(png));
+  const { width, height, data } = img;
+  // known[p]: the texel's RGB is real, i.e. opaque or already filled by an earlier pass.
+  const known = new Uint8Array(width * height);
+  let unknown = 0;
+  for (let p = 0; p < known.length; p++) {
+    if (data[p * 4 + 3]! > 127) known[p] = 1;
+    else unknown++;
+  }
+  if (unknown === 0 || unknown === known.length) return png;
+
+  for (let pass = 0; pass < maxIterations && unknown > 0; pass++) {
+    const filled: number[] = [];
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (known[y * width + x]) continue;
+        let n = 0;
+        const sum = [0, 0, 0];
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+            const q = ny * width + nx;
+            if (!known[q]) continue;
+            n++;
+            for (let c = 0; c < 3; c++) sum[c]! += data[q * 4 + c]!;
+          }
+        }
+        if (n === 0) continue;
+        const o = (y * width + x) * 4;
+        for (let c = 0; c < 3; c++) data[o + c] = Math.round(sum[c]! / n);
+        filled.push(y * width + x);
+      }
+    }
+    // Marked after the pass, so each ring averages the previous ring and not its own neighbours.
+    for (const p of filled) known[p] = 1;
+    unknown -= filled.length;
+  }
+  return new Uint8Array(PNG.sync.write(img));
+}
+
 /** Bilinear downscale so neither side exceeds maxSize; returns the input untouched when already small. */
 export function resizeImage(png: Uint8Array, maxSize: number): Uint8Array {
   const src = PNG.sync.read(Buffer.from(png));

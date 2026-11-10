@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { PNG } from 'pngjs';
 import {
+  bleedAlpha,
   getImage,
   neutralizeImage,
   replaceImage,
@@ -144,4 +145,61 @@ test('resizeImages caps each image at the size its material allows', () => {
   };
   expect(size('Skin_image')).toEqual([2048, 2048]);
   expect(size('Brows_image')).toEqual([1024, 1024]);
+});
+
+function rgbaPng(
+  width: number,
+  height: number,
+  texel: (x: number, y: number) => number[],
+): Uint8Array {
+  const png = new PNG({ width, height });
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      png.data.set(texel(x, y), (y * width + x) * 4);
+    }
+  }
+  return new Uint8Array(PNG.sync.write(png));
+}
+
+describe('bleedAlpha', () => {
+  test('transparent texels take the colour of the opaque ones, alpha unchanged', () => {
+    const out = PNG.sync.read(
+      Buffer.from(
+        bleedAlpha(
+          rgbaPng(4, 4, (x, y) => (x === 1 && y === 1 ? [255, 0, 0, 255] : [255, 255, 255, 0])),
+        ),
+      ),
+    );
+    for (let y = 0; y < 4; y++) {
+      for (let x = 0; x < 4; x++) {
+        const o = (y * 4 + x) * 4;
+        expect([...out.data.subarray(o, o + 3)]).toEqual([255, 0, 0]);
+        expect(out.data[o + 3]).toBe(x === 1 && y === 1 ? 255 : 0);
+      }
+    }
+  });
+
+  test('averages the opaque neighbours and never touches opaque texels', () => {
+    const src = rgbaPng(
+      3,
+      1,
+      (x) =>
+        [
+          [100, 0, 0, 255],
+          [9, 9, 9, 0],
+          [200, 50, 0, 255],
+        ][x]!,
+    );
+    const out = PNG.sync.read(Buffer.from(bleedAlpha(src)));
+    expect([...out.data.subarray(0, 4)]).toEqual([100, 0, 0, 255]);
+    expect([...out.data.subarray(4, 8)]).toEqual([150, 25, 0, 0]);
+    expect([...out.data.subarray(8, 12)]).toEqual([200, 50, 0, 255]);
+  });
+
+  test('an image with no opaque texel, or no transparent one, comes back unchanged', () => {
+    const clear = rgbaPng(2, 2, () => [7, 8, 9, 0]);
+    expect(bleedAlpha(clear)).toBe(clear);
+    const solid = rgbaPng(2, 2, () => [7, 8, 9, 255]);
+    expect(bleedAlpha(solid)).toBe(solid);
+  });
 });
