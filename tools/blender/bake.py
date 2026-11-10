@@ -181,13 +181,15 @@ def _triangle_pixels(corners, rows, columns):
     return (slice(y0, y1 + 1), slice(x0, x1 + 1)), (weights >= 0).all(axis=-1), weights
 
 
-# The base layer's garments (spec §3), as garments() codes them; 0 is bare skin.
-UNDERSHIRT = 1
+# The base layer's garments (spec §3), as garments() codes them; 0 is bare skin. UNDERBAND is the crop
+# top's elastic under-band.
+CROP_TOP = 1
 SHORTS = 2
+UNDERBAND = 3
 
 
 def in_armholes(x, z, strap_x, curve_z, width, depth):
-    """True for each point (x, z) in an armhole of the undershirt. Seen from the front (along y), each
+    """True for each point (x, z) in an armhole of the crop top. Seen from the front (along y), each
     armhole's edge runs straight down at |x| = strap_x, the outer edge of the shoulder strap, to curve_z;
     from there a quarter ellipse curves it out and down to |x| = strap_x + width at curve_z - depth, where
     it runs level under the arm. The armhole is the side of that edge away from the body's midline."""
@@ -211,20 +213,21 @@ def trunk_membership(x, z, torso, pelvis, thigh, neck, arm, hem_z, neck_z, armho
     )
 
 
-def garments(x, z, torso, pelvis, thigh, neck, arm, hem_z, waist_z, neck_z, armhole):
-    """Each point's base-layer garment (UNDERSHIRT, SHORTS or 0), from its position (x, z) and its soft
-    membership of the torso, the pelvis, the thighs, the neck and the upper arms. The trunk is clothed
-    where its membership (trunk_membership) is at least 0.5, outside the armholes, so that the hem and
-    neckline planes and the armholes' edges, not the weights where the torso shades into the thighs, the
-    neck and the arms, draw the hem, the neckline and the armholes. The waist plane alone splits the
-    trunk into the undershirt (waist_z up to neck_z) and the shorts (below waist_z), so no skin can show
-    between the two."""
+def garments(x, z, torso, pelvis, thigh, neck, arm, hem_z, waist_z, crop_z, underband_z, neck_z, armhole):
+    """Each point's base-layer garment (CROP_TOP, UNDERBAND, SHORTS or 0), from its position (x, z) and
+    its soft membership of the torso, the pelvis, the thighs, the neck and the upper arms. The trunk is
+    clothed where its membership (trunk_membership) is at least 0.5, outside the armholes, so that the
+    planes and the armholes' edges, not the weights where the torso shades into the thighs, the neck and
+    the arms, draw the hems, the neckline and the armholes. Planes split the trunk: the shorts below
+    waist_z, bare skin (the midriff) from waist_z up to crop_z, the crop top's under-band from crop_z up
+    to underband_z, and the crop top from there up to neck_z."""
     z = np.asarray(z)
     trunk = trunk_membership(x, z, torso, pelvis, thigh, neck, arm, hem_z, neck_z, armhole)
     clothed = (trunk >= 0.5) & ~in_armholes(x, z, **armhole)
     out = np.zeros(z.shape, dtype=np.uint8)
     out[clothed & (z < waist_z)] = SHORTS
-    out[clothed & (z >= waist_z) & (z <= neck_z)] = UNDERSHIRT
+    out[clothed & (z >= crop_z) & (z < underband_z)] = UNDERBAND
+    out[clothed & (z >= underband_z) & (z <= neck_z)] = CROP_TOP
     return out
 
 
@@ -244,6 +247,20 @@ def waist_plane(spine_02, midlines, most):
                 f"waist at z {waist:.3f} m: midline pelvis weight {weights[-1]:.3f} is not in (0, {most}]"
             )
     return waist, weights
+
+
+def crop_plane(rest, shaped, front, moved, below, bounds):
+    """The crop top's hem height: `below` under the lowest rest height of the `front` vertices (a boolean
+    (N,) array) that a body shape moves by more than `moved` (rest and shaped, (N, 3) coordinates), i.e.
+    under the part of the front that the shape reshapes. Raises ValueError if it moves none, or unless the
+    hem lies within bounds = (lowest, highest)."""
+    reshaped = np.asarray(front, dtype=bool) & (np.linalg.norm(np.asarray(shaped) - rest, axis=1) > moved)
+    if not reshaped.any():
+        raise ValueError(f"the body shape moves no front vertex by more than {moved} m")
+    crop = float(np.asarray(rest)[reshaped, 2].min() - below)
+    if not bounds[0] <= crop <= bounds[1]:
+        raise ValueError(f"crop hem at z {crop:.3f} m is outside [{bounds[0]:.3f}, {bounds[1]:.3f}] m")
+    return crop
 
 
 def uv_islands(faces, uv_faces):
@@ -284,13 +301,14 @@ def base_layer(uv_faces, corner_values, size, planes, colours, islands=None, sam
     """The base layer in the faces' UV layout, antialiased: ((size, size, 4) uint8 straight-alpha RGBA,
     (size, size) bool covered). corner_values holds one (corners, 7) array per face: each corner's x, z,
     torso, pelvis, thigh, neck and upper-arm membership, as garments() takes them with planes = {hem_z,
-    waist_z, neck_z, armhole}; colours maps each garment to its RGB; islands gives each face's UV island
-    (uv_islands; one island if None). A texel is covered if any of its samples x samples samples lies in a
-    face; samples in a face are interpolated and classified one by one. A covered texel weighs the samples
-    of its own island within a texel of its centre by a tent filter (tent_weights): its alpha is the
-    clothed share of that weight, its colour the weighted mean of their garments. A garment's edge thus
-    ramps over about two texels, smooth when a texture is magnified, while an island's own edge stays
-    opaque and never blends with a neighbouring island. A texel not covered is 0."""
+    waist_z, crop_z, underband_z, neck_z, armhole}; colours maps each garment to its RGB; islands gives
+    each face's UV island (uv_islands; one island if None). A texel is covered if any of its samples x
+    samples samples lies in a face; samples in a face are interpolated and classified one by one. A covered
+    texel weighs the samples of its own island within a texel of its centre by a tent filter
+    (tent_weights): its alpha is the clothed share of that weight, its colour the weighted mean of their
+    garments. A garment's edge thus ramps over about two texels, smooth when a texture is magnified, and
+    two garments that meet blend their colours over it, opaque, while an island's own edge stays opaque
+    and never blends with a neighbouring island. A texel not covered is 0."""
     fine = size * samples
     islands = np.zeros(len(uv_faces)) if islands is None else np.asarray(islands)
     tent = tent_weights(samples)
@@ -344,15 +362,15 @@ def base_layer(uv_faces, corner_values, size, planes, colours, islands=None, sam
     return rgba, covered
 
 
-def coverage_gaps(rgba, uv_faces, corner_values, planes, margin):
-    """The base layer's gaps in the trunk (spec §3): the texels of rgba (base_layer's, with uv_faces,
-    corner_values and planes as it took them) whose centre lies in a face, whose trunk membership
-    (trunk_membership, interpolated there) is at least 0.5 and whose height is from `margin` above the
-    shorts' hem up to the armholes' bottom, but whose alpha is below 255. Returns their (row, column)
-    pairs, (K, 2); empty if the base layer covers the trunk there everywhere."""
+def coverage_gaps(rgba, uv_faces, corner_values, planes, band):
+    """The base layer's gaps in one band of the trunk (spec §3): the texels of rgba (base_layer's, with
+    uv_faces, corner_values and planes as it took them) whose centre lies in a face, whose trunk
+    membership (trunk_membership, interpolated there) is at least 0.5 and whose height is within band =
+    (low, high), but whose alpha is below 255. Returns their (row, column) pairs, (K, 2); empty if the base
+    layer covers the trunk there everywhere."""
     size = rgba.shape[0]
     armhole = planes["armhole"]
-    low, high = planes["hem_z"] + margin, armhole["curve_z"] - armhole["depth"]
+    low, high = band
     spans = np.array([[min(p[1] for p in polygon), max(p[1] for p in polygon)] for polygon in uv_faces])
     spans = spans * size - 0.5
     gaps = [np.empty((0, 2), dtype=np.int64)]

@@ -8,12 +8,14 @@ import numpy as np
 
 import bake
 from bake import (
+    CROP_TOP,
     SHORTS,
-    UNDERSHIRT,
+    UNDERBAND,
     anchored,
     base_layer,
     classify_regions,
     coverage_gaps,
+    crop_plane,
     darken,
     disc_weights,
     face_regions,
@@ -162,14 +164,18 @@ class InterpolateTest(unittest.TestCase):
         np.testing.assert_array_equal(values[~covered], 0)
 
 
-# Planes for the garment tests: hem 0.5, waist 1, neck 2 (metres); the armholes far out of the way.
+# Planes for the garment tests: the shorts' hem 0.5 and waist 1, the crop hem 1.2 with the under-band up to
+# 1.3, the neckline 2 (metres); the armholes far out of the way.
 PLANES = {
     "hem_z": 0.5,
     "waist_z": 1.0,
+    "crop_z": 1.2,
+    "underband_z": 1.3,
     "neck_z": 2.0,
     "armhole": {"strap_x": 10.0, "curve_z": 1.5, "width": 1.0, "depth": 0.5},
 }
-COLOURS = {UNDERSHIRT: (0xE9, 0xE6, 0xE1), SHORTS: (0x2F, 0x2F, 0x33)}
+TOP_RGB, UNDERBAND_RGB, SHORTS_RGB = (0xE9, 0xE6, 0xE1), (0xCF, 0xCA, 0xC3), (0x2F, 0x2F, 0x33)
+COLOURS = {CROP_TOP: TOP_RGB, UNDERBAND: UNDERBAND_RGB, SHORTS: SHORTS_RGB}
 
 
 def square(z_top, z_bottom, torso=0.0, pelvis=0.0, thigh=0.0, neck=0.0, arm=0.0, u=(0, 1)):
@@ -209,24 +215,25 @@ class GarmentsTest(unittest.TestCase):
             [SHORTS, SHORTS, 0, 0],
         )
 
-    def test_the_waist_plane_splits_the_trunk_so_nothing_shows_between_undershirt_and_shorts(self):
-        # Just below the waist the torso still dominates; the shorts take it, not the skin.
-        z = np.array([0.99, 1.0, 1.5, 0.3, 2.1])
-        torso = np.array([0.6, 0.6, 1.0, 0.0, 1.0])
-        pelvis = np.array([0.4, 0.0, 0.0, 0.9, 0.0])
+    def test_the_planes_split_the_trunk_into_shorts_bare_midriff_under_band_and_crop_top(self):
+        # Just below the waist the torso still dominates; the shorts take it, not the skin. From the waist up
+        # to the crop hem the trunk is bare, however much torso weight it has.
+        z = np.array([0.99, 1.0, 1.19, 1.2, 1.29, 1.3, 1.5, 0.3, 2.1])
+        torso = np.array([0.6, 1.0, 1.0, 0.6, 1.0, 1.0, 1.0, 0.0, 1.0])
+        pelvis = np.array([0.4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.9, 0.0])
         np.testing.assert_array_equal(
-            garments(zeros(5), z, torso, pelvis, zeros(5), zeros(5), zeros(5), **PLANES),
-            [SHORTS, UNDERSHIRT, UNDERSHIRT, SHORTS, 0],
+            garments(zeros(9), z, torso, pelvis, zeros(9), zeros(9), zeros(9), **PLANES),
+            [SHORTS, 0, 0, UNDERBAND, UNDERBAND, CROP_TOP, CROP_TOP, SHORTS, 0],
         )
 
-    def test_neck_below_the_neckline_is_undershirt_so_the_plane_draws_the_neckline(self):
+    def test_neck_below_the_neckline_is_crop_top_so_the_plane_draws_the_neckline(self):
         # Where the torso shades into the neck, its weights don't decide the neckline: the plane does.
         z = np.array([1.9, 2.0, 2.1, 2.1])
         torso = np.array([0.3, 0.2, 0.3, 0.6])
         neck = np.array([0.7, 0.8, 0.7, 0.4])
         np.testing.assert_array_equal(
             garments(zeros(4), z, torso, zeros(4), zeros(4), neck, zeros(4), **PLANES),
-            [UNDERSHIRT, UNDERSHIRT, 0, 0],
+            [CROP_TOP, CROP_TOP, 0, 0],
         )
 
     def test_the_armholes_edge_not_the_weights_draws_the_armhole(self):
@@ -238,7 +245,7 @@ class GarmentsTest(unittest.TestCase):
         torso = np.array([0.3, 0.3, 0.8, 0.3])
         arm = np.array([0.7, 0.7, 0.2, 0.7])
         np.testing.assert_array_equal(
-            garments(x, z, torso, zeros(4), zeros(4), zeros(4), arm, **planes), [UNDERSHIRT, 0, 0, UNDERSHIRT]
+            garments(x, z, torso, zeros(4), zeros(4), zeros(4), arm, **planes), [CROP_TOP, 0, 0, CROP_TOP]
         )
 
 
@@ -308,14 +315,29 @@ class BaseLayerTest(unittest.TestCase):
         np.testing.assert_array_equal(rgba[2, :, 3], 32)  # 255 x 0.5 / 4
         np.testing.assert_array_equal(rgba[3, :, 3], 0)
 
-    def test_blends_undershirt_into_shorts_across_the_waist_and_stays_opaque(self):
-        # The waist (z = 1) crosses row 1 of 4 at its middle, v = 0.375.
-        uvs, values = square(1.3, 0.5, torso=1.0)
-        rgba, _ = base_layer(uvs, values, 4, PLANES, COLOURS)
-        np.testing.assert_array_equal(rgba[..., 3], 255)
-        np.testing.assert_array_equal(rgba[0], np.broadcast_to([0xE9, 0xE6, 0xE1, 255], (4, 4)))
-        np.testing.assert_array_equal(rgba[2:], np.broadcast_to([0x2F, 0x2F, 0x33, 255], (2, 4, 4)))
-        self.assertTrue(((rgba[1, :, 0] > 0x2F) & (rgba[1, :, 0] < 0xE9)).all(), rgba[1])
+    def test_paints_the_under_band_above_the_crop_hem_and_blends_it_into_the_top(self):
+        # z falls from 1.5 (top) to 1.1 (bottom), 0.025 a row of 16: rows 0..6 lie wholly above the under-band
+        # (1.2 to 1.3), rows 9 and 10 wholly in it, row 13 on down wholly below the crop hem.
+        uvs, values = square(1.5, 1.1, torso=1.0)
+        rgba, _ = base_layer(uvs, values, 16, PLANES, COLOURS)
+        np.testing.assert_array_equal(rgba[:7], np.broadcast_to([*TOP_RGB, 255], (7, 16, 4)))
+        np.testing.assert_array_equal(rgba[9:11], np.broadcast_to([*UNDERBAND_RGB, 255], (2, 16, 4)))
+        # The band's top edge blends its colour into the top's, opaque.
+        np.testing.assert_array_equal(rgba[7:9, :, 3], 255)
+        self.assertTrue(((rgba[7:9, :, 0] > 0xCF) & (rgba[7:9, :, 0] < 0xE9)).all(), rgba[7:9, :, 0])
+        # The crop hem ramps the band's alpha, in the band's colour, down to the bare midriff below it.
+        np.testing.assert_array_equal(rgba[11:13, :, :3], np.broadcast_to(UNDERBAND_RGB, (2, 16, 3)))
+        self.assertTrue(((rgba[11:13, :, 3] > 0) & (rgba[11:13, :, 3] < 255)).all(), rgba[11:13, :, 3])
+        np.testing.assert_array_equal(rgba[13:, :, 3], 0)
+
+    def test_leaves_the_midriff_between_the_waist_and_the_crop_hem_bare(self):
+        # z falls from 1.3 (top) to 0.9 (bottom), 0.05 a row of 8: rows 3 and 4 lie wholly in the midriff
+        # (1.0 to 1.2), torso throughout; row 0 is in the under-band, row 7 in the shorts.
+        uvs, values = square(1.3, 0.9, torso=1.0)
+        rgba, _ = base_layer(uvs, values, 8, PLANES, COLOURS)
+        np.testing.assert_array_equal(rgba[3:5, :, 3], 0)
+        np.testing.assert_array_equal(rgba[0], np.broadcast_to([*UNDERBAND_RGB, 255], (8, 4)))
+        np.testing.assert_array_equal(rgba[7], np.broadcast_to([*SHORTS_RGB, 255], (8, 4)))
 
     def test_measures_coverage_over_the_samples_inside_a_face_so_island_edges_stay_opaque(self):
         # A triangle's slanted edge cuts through texels: those it covers in part are still fully shorts.
@@ -374,42 +396,96 @@ class TrunkMembershipTest(unittest.TestCase):
 
 
 class CoverageGapsTest(unittest.TestCase):
-    # The hem at 0.5, the armholes' bottom at 1.5 - 0.3 = 1.2; the tests take a margin of 0.1 above the hem.
+    # The shorts from their hem at 0.3 up to the waist at 0.7, bare skin up to the crop hem at 1.0, the crop
+    # top from there; the armholes' bottom at 1.5 - 0.1 = 1.4.
     PLANES = {
-        "hem_z": 0.5,
-        "waist_z": 1.0,
+        "hem_z": 0.3,
+        "waist_z": 0.7,
+        "crop_z": 1.0,
+        "underband_z": 1.05,
         "neck_z": 2.0,
-        "armhole": {"strap_x": 10.0, "curve_z": 1.5, "width": 1.0, "depth": 0.3},
+        "armhole": {"strap_x": 10.0, "curve_z": 1.5, "width": 1.0, "depth": 0.1},
     }
+    # Each garment's band keeps 0.1 clear of its edges, where a texel's filter (0.0875 m here) ramps alpha:
+    # the crop top's rows 2..5, the shorts' rows 11..13.
+    TOP = (1.1, 1.4)
+    SHORTS = (0.4, 0.6)
 
     def layer(self):
         # One torso quad from z 1.6 (top row) down to 0.2 (bottom row): the trunk throughout, clothed by
-        # base_layer from the hem (0.5) up; rows 0..15 of 16, 0.0875 m each.
+        # base_layer but for the midriff; rows 0..15 of 16, 0.0875 m each.
         uvs, values = square(1.6, 0.2, torso=1.0)
         rgba, _ = base_layer(uvs, values, 16, self.PLANES, COLOURS)
         return uvs, values, rgba
 
-    def test_finds_none_where_the_base_layer_covers_the_trunk(self):
-        uvs, values, rgba = self.layer()
-        self.assertEqual(coverage_gaps(rgba, uvs, values, self.PLANES, margin=0.1).shape, (0, 2))
+    def gaps(self, rgba, uvs, values):
+        """The gaps in the crop top's band and in the shorts' band, as lists of (row, column)."""
+        bands = (self.TOP, self.SHORTS)
+        return [coverage_gaps(rgba, uvs, values, self.PLANES, band).tolist() for band in bands]
 
-    def test_finds_a_hole_in_the_trunk_between_the_hem_and_the_armholes(self):
+    def test_finds_none_where_both_garments_cover_their_bands_of_the_trunk(self):
         uvs, values, rgba = self.layer()
-        rgba[6, 9, 3] = 0  # z 1.6 - 6.5 x 0.0875 = 1.03
-        rgba[7, 2, 3] = 254
-        np.testing.assert_array_equal(
-            coverage_gaps(rgba, uvs, values, self.PLANES, margin=0.1), [[6, 9], [7, 2]]
-        )
+        self.assertEqual(coverage_gaps(rgba, uvs, values, self.PLANES, self.TOP).shape, (0, 2))
+        self.assertEqual(self.gaps(rgba, uvs, values), [[], []])
 
-    def test_ignores_holes_above_the_armholes_bottom_below_the_margin_or_off_the_trunk(self):
+    def test_finds_a_hole_in_the_crop_tops_band(self):
         uvs, values, rgba = self.layer()
-        rgba[3, 4, 3] = 0  # z 1.29: above the armholes' bottom
-        rgba[12, 4, 3] = 0  # z 0.51: within the margin above the hem
-        np.testing.assert_array_equal(coverage_gaps(rgba, uvs, values, self.PLANES, margin=0.1).shape, (0, 2))
+        rgba[3, 9, 3] = 0  # z 1.6 - 3.5 x 0.0875 = 1.29
+        rgba[5, 2, 3] = 254  # z 1.12
+        self.assertEqual(self.gaps(rgba, uvs, values), [[[3, 9], [5, 2]], []])
+
+    def test_finds_a_hole_in_the_shorts_band(self):
+        uvs, values, rgba = self.layer()
+        rgba[12, 4, 3] = 0  # z 0.51
+        self.assertEqual(self.gaps(rgba, uvs, values), [[], [[12, 4]]])
+
+    def test_a_hole_in_the_bare_midriff_is_no_gap(self):
+        uvs, values, rgba = self.layer()
+        np.testing.assert_array_equal(rgba[8, :, 3], 0)  # z 0.86: the midriff is bare skin
+        rgba[7, 4, 3] = 0  # z 0.94 and 0.77: its antialiased edges
+        rgba[9, 4, 3] = 0
+        self.assertEqual(self.gaps(rgba, uvs, values), [[], []])
+
+    def test_ignores_holes_above_the_armholes_bottom_by_the_garments_edges_or_off_the_trunk(self):
+        uvs, values, rgba = self.layer()
+        rgba[1, 4, 3] = 0  # z 1.47: above the armholes' bottom
+        rgba[6, 4, 3] = 0  # z 1.03: within the margin above the crop hem
+        rgba[10, 4, 3] = 0  # z 0.68: within the margin below the waist
+        rgba[14, 4, 3] = 0  # z 0.33: within the margin above the shorts' hem
+        self.assertEqual(self.gaps(rgba, uvs, values), [[], []])
         # Where the trunk membership is below 0.5 nothing is required.
         uvs, values = square(1.6, 0.2, torso=0.4)
         rgba = np.zeros((16, 16, 4), dtype=np.uint8)
-        self.assertEqual(coverage_gaps(rgba, uvs, values, self.PLANES, margin=0.1).shape, (0, 2))
+        self.assertEqual(self.gaps(rgba, uvs, values), [[], []])
+
+
+class CropPlaneTest(unittest.TestCase):
+    # Five front vertices (y < 0) from z 0.9 up to 1.3 and one on the back at 1.0. The bust shape moves the
+    # front ones from 1.1 up (the "breast") by 5 mm or more; the front one at 1.0 by 1.9 mm, under the
+    # threshold; the back one by 50 mm.
+    def setUp(self):
+        z = np.array([0.9, 1.0, 1.1, 1.2, 1.3, 1.0])
+        y = np.array([-0.1, -0.1, -0.1, -0.1, -0.1, 0.1])
+        self.rest = np.column_stack([np.zeros(6), y, z])
+        moved = np.array([0.0, 0.0019, 0.005, 0.03, 0.01, 0.05])
+        self.shaped = self.rest + moved[:, np.newaxis] * [0.0, -0.6, -0.8]
+        self.front = y < 0
+
+    def crop(self, bounds):
+        return crop_plane(self.rest, self.shaped, self.front, moved=0.002, below=0.03, bounds=bounds)
+
+    def test_is_below_the_lowest_front_vertex_the_bust_shape_moves(self):
+        self.assertAlmostEqual(self.crop((0.9, 1.2)), 1.1 - 0.03, delta=1e-12)
+
+    def test_raises_outside_its_bounds(self):
+        with self.assertRaisesRegex(ValueError, "crop hem at z 1.070 m is outside"):
+            self.crop((1.08, 1.2))
+        with self.assertRaisesRegex(ValueError, "crop hem at z 1.070 m is outside"):
+            self.crop((0.9, 1.06))
+
+    def test_raises_if_the_shape_moves_no_front_vertex(self):
+        with self.assertRaisesRegex(ValueError, "moves no front vertex"):
+            crop_plane(self.rest, self.rest, self.front, moved=0.002, below=0.03, bounds=(0, 2))
 
 
 class WidenIntoTest(unittest.TestCase):

@@ -29,14 +29,16 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from bake import (  # noqa: E402
+    CROP_TOP,
     REGION_CODES,
     REGION_OF_GROUP,
     SHORTS,
-    UNDERSHIRT,
+    UNDERBAND,
     anchored,
     base_layer,
     classify_regions,
     coverage_gaps,
+    crop_plane,
     darken,
     disc_weights,
     face_regions,
@@ -60,9 +62,9 @@ from targets import EXPRESSION_RECIPES, mix, parse_target, to_blender  # noqa: E
 SKIN_MHMAT = "young_caucasian_female2"
 # The base's macros over MPFB's defaults (0.5 each): gender 0, female.
 BASE_MACROS = {"gender": 0.0}
-# A modest fit, so that the base layer's fitted undershirt, painted on the skin, shows no nipple geometry.
-# Every human, the base and each body probe alike, is made with these MPFB targets (data/targets/<dir>/
-# <name>.target.gz) at weight 1, and then its FLATTENED_GROUP vertices (the nipples and areolae) are
+# A modest fit, so that the base layer's fitted sports crop top, painted on the skin, shows no nipple
+# geometry. Every human, the base and each body probe alike, is made with these MPFB targets (data/targets/
+# <dir>/<name>.target.gz) at weight 1, and then its FLATTENED_GROUP vertices (the nipples and areolae) are
 # moved onto the surface around them: the targets alone leave a small tip, and at a weight above 1 they
 # fold the mesh.
 BASE_TARGETS = ("breast/nipple-size-decr", "breast/nipple-point-decr")
@@ -208,29 +210,47 @@ HEAD_STILL_M = 1e-6
 # An unchanged probe must reproduce the base this closely, or every body delta is polluted.
 PROBE_TOLERANCE_M = 1e-5
 
-# The base layer (spec §3), painted over the skin at runtime: a fitted undershirt over the torso and
-# shorts over the pelvis, opaque, transparent everywhere else, antialiased (bake.base_layer). 2048², the
-# Skin texture's size.
-UNDERSHIRT_RGB = (0xE9, 0xE6, 0xE1)
+# The base layer (spec §3), painted over the skin at runtime: a fitted sports crop top over the chest, its
+# elastic under-band a shade darker, and short shorts over the pelvis, opaque; the midriff between them and
+# everything else transparent; antialiased (bake.base_layer). 2048², the Skin texture's size.
+CROP_TOP_RGB = (0xE9, 0xE6, 0xE1)
+UNDERBAND_RGB = (0xCF, 0xCA, 0xC3)
 SHORTS_RGB = (0x2F, 0x2F, 0x33)
 BASE_LAYER_SIZE = 2048
 # The region-ID map (spec §7): R = the region code of the face under each pixel, 0 = never hidden.
 REGIONS_SIZE = 1024
-# The shorts' hem (spec §5): thigh vertices above it are pelvis. The crotch is the lowest midline vertex
-# in the pelvis vertex group; midline vertices are within MIDLINE_M of x = 0.
-HEM_BELOW_CROTCH_M = 0.08
+# The region map's hem (spec §5): thigh vertices above it are pelvis. It stays where the shorts' hem was
+# before they were cut short, so the pelvis region reaches below the short shorts: a garment that claims
+# pelvis covers more than the base layer. The crotch is the lowest midline vertex in the pelvis vertex
+# group; midline vertices are within MIDLINE_M of x = 0.
+REGION_HEM_BELOW_CROTCH_M = 0.08
+# The short shorts' hem.
+HEM_BELOW_CROTCH_M = 0.03
 MIDLINE_M = 1e-4
-# The base layer's waist, where the undershirt meets the shorts (bake.waist_plane): midway along the
+# The base layer's waist, the shorts' upper edge (bake.waist_plane): midway along the
 # spine_02 bone, 1.006 m on the base, above the navel (0.948 to 0.990 m; the weight morph lifts the belly
 # below the navel by up to 9 mm, which would bend a waist line there into a peak). The build fails unless
 # that is the top of the pelvis vertex group, where the pelvis weight on the front and back midlines has
 # faded to between 0 and WAIST_PELVIS_MAX.
 WAIST_PELVIS_MAX = 0.1
-# The undershirt's neckline: NECKLINE_BELOW_M below the lowest front-midline vertex whose neck weight
+# The crop top's hem (bake.crop_plane): CROP_BELOW_BUST_M below the lowest front vertex that the
+# CROP_BUST_TARGET body target moves by more than CROP_BUST_MOVED_M, i.e. under the breast, 1.072 m on the
+# base. The cup-down target moves the breast alone; the cup-up one also drags the chest wall below it. The
+# breast's texels are then in the top at every bust value, since texels move with the surface. The build
+# fails unless the hem lies from CROP_ABOVE_WAIST_M above the waist up to CROP_BELOW_ARMHOLE_M below the
+# armholes' bottom. Between the waist and the hem the midriff is bare.
+CROP_BUST_TARGET = "body_bust_min"
+CROP_BUST_MOVED_M = 0.002
+CROP_BELOW_BUST_M = 0.03
+CROP_ABOVE_WAIST_M = 0.06
+CROP_BELOW_ARMHOLE_M = 0.10
+# The crop top's elastic under-band, UNDERBAND_RGB: from the hem up UNDERBAND_M.
+UNDERBAND_M = 0.025
+# The crop top's neckline: NECKLINE_BELOW_M below the lowest front-midline vertex whose neck weight
 # (neck_01 + head: on the front, the head's weight comes in before neck_01's alone reaches 0.5) is at
 # least 0.5.
 NECKLINE_BELOW_M = 0.01
-# The undershirt's armholes (bake.in_armholes), from the shoulder joints (the upper arms' heads): seen from
+# The crop top's armholes (bake.in_armholes), from the shoulder joints (the upper arms' heads): seen from
 # the front, each runs straight down STRAP_INSIDE_SHOULDER_M inside the joint, the shoulder strap's outer
 # edge, to the joint's height, then curves out ARMHOLE_WIDTH_M to a level bottom ARMHOLE_DEPTH_M below the
 # joint, under the armpit. The upper arms' weights over the shoulders, which shade into the torso's over
@@ -238,12 +258,13 @@ NECKLINE_BELOW_M = 0.01
 STRAP_INSIDE_SHOULDER_M = 0.03
 ARMHOLE_WIDTH_M = 0.06
 ARMHOLE_DEPTH_M = 0.09
-# The base layer must cover every texel of the trunk (spec §3) from COVERAGE_ABOVE_HEM_M above the shorts'
-# hem, where the shorts' antialiased edge ends, up to the armholes' bottom; the build fails otherwise.
-COVERAGE_ABOVE_HEM_M = 0.01
+# The base layer must cover every texel of the trunk (spec §3) in two bands, each COVERAGE_MARGIN_M clear
+# of the garment's antialiased edges: the crop top's, from above its hem up to the armholes' bottom, and the
+# shorts', from above their hem to below the waist; the build fails otherwise.
+COVERAGE_MARGIN_M = 0.01
 # Pixels each map grows every UV island by into the texels no face covers, so that a sample on a UV seam
 # (the back's midline, the crotch) blends the island with itself, not with what lies outside it: without
-# it, filtering draws a line of skin down the back of the undershirt and shorts. 8 px of 2048² holds down
+# it, filtering draws a line of skin down the back of the crop top and shorts. 8 px of 2048² holds down
 # to the 256² mip level. Islands that meet in a gutter split it; no island's own texels are painted over.
 MAP_MARGIN_PX = {BASE_LAYER_SIZE: 8, REGIONS_SIZE: 4}
 
@@ -721,10 +742,12 @@ def joint(rig, bone, end="head"):
     return np.array(rig.matrix_world @ getattr(rig.data.bones[bone], f"{end}_local"))
 
 
-def base_layer_planes(weights, coords, hem_z, rig):
-    """The base layer's planes and armholes ({hem_z, waist_z, neck_z, armhole}, bake.garments), from the
-    rig's joints and the Body's midlines (WAIST_PELVIS_MAX, NECKLINE_BELOW_M, STRAP_INSIDE_SHOULDER_M,
-    ARMHOLE_WIDTH_M, ARMHOLE_DEPTH_M). The front is the way the feet point."""
+def base_layer_planes(weights, coords, bust, hem_z, rig):
+    """The base layer's planes and armholes ({hem_z, waist_z, crop_z, underband_z, neck_z, armhole},
+    bake.garments), from the rig's joints, the Body's midlines (WAIST_PELVIS_MAX, NECKLINE_BELOW_M,
+    STRAP_INSIDE_SHOULDER_M, ARMHOLE_WIDTH_M, ARMHOLE_DEPTH_M) and the front vertices that `bust`, the
+    Body's CROP_BUST_TARGET shape ((N, 3)), moves (CROP_BUST_MOVED_M, CROP_BELOW_BUST_M, CROP_ABOVE_WAIST_M,
+    CROP_BELOW_ARMHOLE_M, UNDERBAND_M). The front is the way the feet point."""
     x, y, z = coords.T
     front = np.sign((joint(rig, "foot_l", "tail") - joint(rig, "foot_l"))[1])  # MakeHuman faces -y
     if front == 0:
@@ -746,12 +769,30 @@ def base_layer_planes(weights, coords, hem_z, rig):
         "width": ARMHOLE_WIDTH_M,
         "depth": ARMHOLE_DEPTH_M,
     }
-    planes = {"hem_z": hem_z, "waist_z": waist_z, "neck_z": float(neck.min() - NECKLINE_BELOW_M)}
-    if not planes["hem_z"] < planes["waist_z"] < armhole["curve_z"] - ARMHOLE_DEPTH_M < planes["neck_z"]:
+    armhole_bottom = float(shoulder_z - ARMHOLE_DEPTH_M)
+    crop_z = crop_plane(
+        coords,
+        bust,
+        y * front > 0,
+        CROP_BUST_MOVED_M,
+        CROP_BELOW_BUST_M,
+        (waist_z + CROP_ABOVE_WAIST_M, armhole_bottom - CROP_BELOW_ARMHOLE_M),
+    )
+    planes = {
+        "hem_z": hem_z,
+        "waist_z": waist_z,
+        "crop_z": crop_z,
+        "underband_z": crop_z + UNDERBAND_M,
+        "neck_z": float(neck.min() - NECKLINE_BELOW_M),
+    }
+    if not hem_z < waist_z < crop_z < planes["underband_z"] < armhole_bottom < planes["neck_z"]:
         raise RuntimeError(f"base-layer planes out of order: {planes}, armholes {armhole}")
     print(
         f"build_base: base layer waist at z {waist_z:.3f} m (midway along spine_02; midline pelvis weight "
-        f"there front {pelvis[0]:.3f}, back {pelvis[1]:.3f}), neckline at z {planes['neck_z']:.3f} m "
+        f"there front {pelvis[0]:.3f}, back {pelvis[1]:.3f}), crop hem at z {crop_z:.3f} m "
+        f"({CROP_BELOW_BUST_M} m below the lowest front vertex {CROP_BUST_TARGET} moves, at "
+        f"{crop_z + CROP_BELOW_BUST_M:.3f} m), under-band up to z {planes['underband_z']:.3f} m, "
+        f"neckline at z {planes['neck_z']:.3f} m "
         f"(front-midline neck weight 0.5 at {neck.min():.3f} m); armholes from the shoulder joints "
         f"(|x| {shoulder_x:.3f} m, z {shoulder_z:.3f} m): strap edge at |x| {armhole['strap_x']:.3f} m, "
         f"level bottom at z {shoulder_z - ARMHOLE_DEPTH_M:.3f} m"
@@ -762,12 +803,13 @@ def base_layer_planes(weights, coords, hem_z, rig):
 def bake_maps(contract, body, rig, work):
     """Writes <work>/regions.png (R = region code, REGIONS_SIZE²) in the Body's UV layout: each vertex
     takes its dominant bone's region, each face its vertices' majority (bake.py). <work>/baselayer.png
-    (undershirt and shorts, BASE_LAYER_SIZE² RGBA), classified per supersample from each vertex's x and
-    height and its torso, pelvis, thigh, neck and upper-arm membership, interpolated over the faces, and
-    filtered within each UV island (bake.base_layer); the build fails if it leaves any trunk texel from
-    COVERAGE_ABOVE_HEM_M above the hem up to the armholes' bottom less than opaque (bake.coverage_gaps). And
-    <work>/coverage.png (R = 255 where a face covers the texel, BASE_LAYER_SIZE², the Skin texture's
-    size): build-base.ts neutralises the skin on those texels only, not on the UV gutter."""
+    (the sports crop top, its under-band and the short shorts, BASE_LAYER_SIZE² RGBA), classified per
+    supersample from each vertex's x and height and its torso, pelvis, thigh, neck and upper-arm
+    membership, interpolated over the faces, and filtered within each UV island (bake.base_layer); the
+    build fails if it leaves any trunk texel in the crop top's or the shorts' band (COVERAGE_MARGIN_M) less
+    than opaque (bake.coverage_gaps). And <work>/coverage.png (R = 255 where a face covers the texel,
+    BASE_LAYER_SIZE², the Skin texture's size): build-base.ts neutralises the skin on those texels only,
+    not on the UV gutter."""
     if contract["regions"] != REGION_CODES:
         raise RuntimeError(f"contract regions {contract['regions']} != bake.py's {REGION_CODES}")
     weights = bone_weights(body, rig)
@@ -775,14 +817,16 @@ def bake_maps(contract, body, rig, work):
     crotch = coords[(weights["pelvis"] > 0) & (np.abs(coords[:, 0]) <= MIDLINE_M), 2]
     if len(crotch) == 0:
         raise RuntimeError(f"{body.name}: no midline vertex in the pelvis group")
+    region_hem_z = crotch.min() - REGION_HEM_BELOW_CROTCH_M
     hem_z = crotch.min() - HEM_BELOW_CROTCH_M
-    vertex_codes = classify_regions(weights, coords[:, 2], hem_z)
+    vertex_codes = classify_regions(weights, coords[:, 2], region_hem_z)
     faces, uvs = uv_faces(body.data)
     face_codes = face_regions(vertex_codes, faces)
     counts = np.bincount(face_codes, minlength=len(REGION_CODES) + 1)
     names = {code: region for region, code in REGION_CODES.items()} | {0: "never hidden"}
     print(
-        f"build_base: hem at z {hem_z:.3f} m (crotch {crotch.min():.3f} m); faces per region: "
+        f"build_base: shorts' hem at z {hem_z:.3f} m, region map's at z {region_hem_z:.3f} m (crotch "
+        f"{crotch.min():.3f} m); faces per region: "
         + ", ".join(f"{names[code]} {count}" for code, count in enumerate(counts))
     )
 
@@ -795,10 +839,11 @@ def bake_maps(contract, body, rig, work):
     regions[..., 0] = region_map(REGIONS_SIZE)
     (work / "regions.png").write_bytes(png_bytes(regions))
 
-    planes = base_layer_planes(weights, coords, hem_z, rig)
+    bust = coords_array(body.data.shape_keys.key_blocks[CROP_BUST_TARGET].data)
+    planes = base_layer_planes(weights, coords, bust, hem_z, rig)
     worn_over = ("torso", "pelvis", "thighs", "neck", "upperArms")
     per_vertex = np.column_stack([coords[:, 0], coords[:, 2], *(membership(weights, r) for r in worn_over)])
-    colours = {UNDERSHIRT: UNDERSHIRT_RGB, SHORTS: SHORTS_RGB}
+    colours = {CROP_TOP: CROP_TOP_RGB, UNDERBAND: UNDERBAND_RGB, SHORTS: SHORTS_RGB}
     islands = uv_islands(faces, uvs)
     corner_values = [per_vertex[face] for face in faces]
     layer, covered = base_layer(uvs, corner_values, BASE_LAYER_SIZE, planes, colours, islands)
@@ -807,15 +852,19 @@ def bake_maps(contract, body, rig, work):
         f"build_base: base layer texels: {np.count_nonzero(alpha == 255)} clothed, "
         f"{np.count_nonzero((alpha > 0) & (alpha < 255))} antialiased; {islands.max() + 1} UV islands"
     )
-    gaps = coverage_gaps(layer, uvs, corner_values, planes, COVERAGE_ABOVE_HEM_M)
-    low = planes["hem_z"] + COVERAGE_ABOVE_HEM_M
-    high = planes["armhole"]["curve_z"] - planes["armhole"]["depth"]
-    if len(gaps) > 0:
-        raise RuntimeError(
-            f"the base layer leaves {len(gaps)} trunk texels from z {low:.3f} to {high:.3f} m not fully "
-            f"covered (spec §3), e.g. (row, column) {gaps[:5].tolist()}"
-        )
-    print(f"build_base: base layer covers every trunk texel from z {low:.3f} to {high:.3f} m: OK")
+    armhole = planes["armhole"]
+    bands = {
+        "crop top": (planes["crop_z"] + COVERAGE_MARGIN_M, armhole["curve_z"] - armhole["depth"]),
+        "shorts": (planes["hem_z"] + COVERAGE_MARGIN_M, planes["waist_z"] - COVERAGE_MARGIN_M),
+    }
+    for garment, (low, high) in bands.items():
+        gaps = coverage_gaps(layer, uvs, corner_values, planes, (low, high))
+        if len(gaps) > 0:
+            raise RuntimeError(
+                f"the base layer's {garment} leaves {len(gaps)} trunk texels from z {low:.3f} to "
+                f"{high:.3f} m not fully covered (spec §3), e.g. (row, column) {gaps[:5].tolist()}"
+            )
+        print(f"build_base: the {garment} covers every trunk texel from z {low:.3f} to {high:.3f} m: OK")
     layer = widen_into(layer, covered, MAP_MARGIN_PX[BASE_LAYER_SIZE])
     (work / "baselayer.png").write_bytes(png_bytes(layer))
 
