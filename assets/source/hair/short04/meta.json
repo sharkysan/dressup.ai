@@ -1,0 +1,11 @@
+{
+  "id": "short04",
+  "name": "Short slicked back",
+  "tags": {
+    "length": "short",
+    "volume": "low",
+    "bangs": false,
+    "parting": "none"
+  },
+  "license": "CC0-1.0"
+}

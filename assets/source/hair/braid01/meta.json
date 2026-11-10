@@ -1,0 +1,11 @@
+{
+  "id": "braid01",
+  "name": "Single braid",
+  "tags": {
+    "length": "long",
+    "volume": "low",
+    "bangs": true,
+    "parting": "left"
+  },
+  "license": "CC0-1.0"
+}

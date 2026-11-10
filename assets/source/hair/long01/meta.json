@@ -1,0 +1,11 @@
+{
+  "id": "long01",
+  "name": "Long straight",
+  "tags": {
+    "length": "long",
+    "volume": "low",
+    "bangs": false,
+    "parting": "center"
+  },
+  "license": "CC0-1.0"
+}

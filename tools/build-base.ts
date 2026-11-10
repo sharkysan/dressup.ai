@@ -2,13 +2,15 @@
  * build-base: the realistic MakeHuman base (spec §4, §7), built headlessly in Blender, → <out>/base.vrm,
  * <out>/base.json (height metadata, baseMetaSchema), <out>/baselayer.webp (the undershirt and shorts,
  * painted over the skin at runtime), <out>/regions.png (region-ID map) and <out>/eyes/<preset>.webp (one
- * eye texture per eye-colour preset).
- *   tsx tools/build-base.ts --out public/assets/base
- * Steps: write the naming contract → tools/blender/build_base.py (MPFB human, rig, proxies, T-pose,
- * expressions, body-shape targets, region, base-layer and UV-coverage maps, eye textures, VRM 1.0
- * export, base.json) → neutral skin (measured on the covered texels), brow and lash textures → texture
- * sizes → sparse morph targets → WebP textures → prune
- * → validate against the contract, and base.json against its schema → size budget → atomic writes.
+ * eye texture per eye-colour preset); and MakeHuman's stock hairstyles, skinned to the base's rig with its
+ * body targets, → <hair-out>/<id>.glb.
+ *   tsx tools/build-base.ts --out public/assets/base --hair-out public/assets/hair
+ * Steps: write the naming contract → tools/blender/build_base.py (MPFB human, rig, proxies, hairstyles,
+ * T-pose, expressions, body-shape targets, hairstyle export, region, base-layer and UV-coverage maps, eye
+ * textures, VRM 1.0 export, base.json) → neutral skin (measured on the covered texels), brow and lash
+ * textures → texture sizes → sparse morph targets → WebP textures → prune
+ * → validate against the contract, and base.json against its schema → size budget → the hairstyles
+ * (base/buildHair.ts) → atomic writes.
  * Needs the Blender toolchain (npm run blender:setup).
  */
 import { spawnSync } from 'node:child_process';
@@ -18,6 +20,7 @@ import path from 'node:path';
 import sharp from 'sharp';
 import { MATERIALS, baseMetaSchema, contractJson } from '../src/avatar/baseContract';
 import { avatarParamsSchema } from '../src/catalog/params';
+import { processHair } from './base/buildHair';
 import { validateBase } from './base/validateBase';
 import { writeAtomically } from './base/writeAtomically';
 import { cli, human, required } from './cli';
@@ -90,8 +93,14 @@ async function eyeTextures(work: string): Promise<Map<string, Uint8Array>> {
 
 export async function buildBase(opts: {
   out: string;
+  hairOut: string;
   budgetBytes?: number;
-}): Promise<{ bytes: number; problems: string[]; outputs: { file: string; bytes: number }[] }> {
+}): Promise<{
+  bytes: number;
+  problems: string[];
+  outputs: { file: string; bytes: number }[];
+  hair: { id: string; bytes: number }[];
+}> {
   const budget = opts.budgetBytes ?? BASE_BUDGET_BYTES;
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'kiss-base-'));
   try {
@@ -131,6 +140,9 @@ export async function buildBase(opts: {
     if (bytes.byteLength > budget) {
       throw new Error(`base.vrm is ${human(bytes.byteLength)}, over its ${human(budget)} budget`);
     }
+    // The hairstyles are skinned to the base's bones: built once the base passes, and before it is written,
+    // so that a failing hairstyle leaves the previous base and hairstyles in place.
+    const hair = await processHair(work, opts.hairOut);
     // Published path (relative to out) -> bytes. regions.png stays PNG: its codes must survive exactly.
     // The base layer is lossless WebP: its flat colours stay exact, and it is smaller than at quality 90.
     const files = new Map<string, Uint8Array>([
@@ -148,18 +160,22 @@ export async function buildBase(opts: {
     fs.mkdirSync(path.join(opts.out, 'eyes'), { recursive: true });
     for (const [file, data] of files) writeAtomically(path.join(opts.out, file), data);
     const outputs = [...files].map(([file, data]) => ({ file, bytes: data.byteLength }));
-    return { bytes: bytes.byteLength, problems, outputs };
+    return { bytes: bytes.byteLength, problems, outputs, hair };
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
   }
 }
 
 if (process.argv[1] && /build-base\.(ts|js)$/.test(process.argv[1])) {
-  const args = cli(['out'] as const, [] as const);
+  const args = cli(['out', 'hair-out'] as const, [] as const);
   const out = required(args.out, 'out');
-  buildBase({ out })
+  const hairOut = required(args['hair-out'], 'hair-out');
+  buildBase({ out, hairOut })
     .then((r) => {
       for (const o of r.outputs) console.log(`wrote ${path.join(out, o.file)} (${human(o.bytes)})`);
+      for (const h of r.hair) {
+        console.log(`wrote ${path.join(hairOut, `${h.id}.glb`)} (${human(h.bytes)})`);
+      }
     })
     .catch((e) => {
       console.error(e instanceof Error ? e.message : e);

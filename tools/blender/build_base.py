@@ -10,7 +10,9 @@ contract that tools/build-base.ts writes from src/avatar/baseContract.ts. Writes
 Body's height and lowest point, and how much each body target changes them (baseMetaSchema);
 <work>/regions.png and <work>/baselayer.png, the region-ID map and the base layer in the Body's UV
 layout, and <work>/coverage.png, the texels the Body's faces cover; and <work>/eyes/<preset>.png, one
-eye texture per eye-colour preset. Exits 1 if any step or the export fails.
+eye texture per eye-colour preset. And writes <work>/hair/<id>.glb for each of MakeHuman's stock
+hairstyles: the rig and the hairstyle, skinned, its mesh and material named Hair (alpha clipped), with the
+body-shape shape keys captured from the basemesh. Exits 1 if any step or the export fails.
 """
 
 import argparse
@@ -77,6 +79,22 @@ PROXIES = {
     "teeth": ("teeth", "teeth_base"),
     "tongue": ("tongue", "tongue01"),
 }
+
+# MakeHuman's stock hairstyles (MPFB data/hair/<id>/<id>.mhclo, CC0), each exported as <work>/hair/<id>.glb.
+HAIRSTYLES = (
+    "afro01",
+    "bob01",
+    "bob02",
+    "braid01",
+    "long01",
+    "ponytail01",
+    "short01",
+    "short02",
+    "short03",
+    "short04",
+)
+# The name of each exported hairstyle's mesh and material.
+HAIR = "Hair"
 
 # game_engine rig bone -> VRM 1.0 humanoid bone. The same table as the VRM add-on's Unreal mapping
 # (common/human_bone_mapper/unreal_mapping.py); every bone is checked against the rig at build time.
@@ -340,6 +358,35 @@ def add_proxies(basemesh):
     return proxies
 
 
+def add_hair(basemesh):
+    """Adds every HAIRSTYLES hairstyle, rigged to the basemesh's rig. Returns {id: object}. The basemesh is
+    left as it was: a Mask modifier MPFB adds to hide the body under a hairstyle is removed with its
+    vertex group, and the build fails if anything else on the basemesh changed."""
+    HumanService = mpfb_service("HumanService")
+    vertices = len(basemesh.data.vertices)
+    modifiers = {modifier.name for modifier in basemesh.modifiers}
+    groups = {group.name for group in basemesh.vertex_groups}
+    hair = {}
+    for name in HAIRSTYLES:
+        mhclo = mpfb_data() / "hair" / name / f"{name}.mhclo"
+        hair[name] = HumanService.add_mhclo_asset(
+            str(mhclo), basemesh, asset_type="hair", subdiv_levels=0, material_type="GAMEENGINE"
+        )
+    for modifier in list(basemesh.modifiers):
+        if modifier.name not in modifiers and modifier.type == "MASK":
+            if modifier.vertex_group in basemesh.vertex_groups and modifier.vertex_group not in groups:
+                basemesh.vertex_groups.remove(basemesh.vertex_groups[modifier.vertex_group])
+            basemesh.modifiers.remove(modifier)
+    added = [m.name for m in basemesh.modifiers if m.name not in modifiers]
+    added += [g.name for g in basemesh.vertex_groups if g.name not in groups]
+    if len(basemesh.data.vertices) != vertices or added:
+        raise RuntimeError(
+            f"the hairstyles changed {basemesh.name}: {vertices} -> {len(basemesh.data.vertices)} "
+            f"vertices, added {added}"
+        )
+    return hair
+
+
 def apply_t_pose(rig):
     LocationService = mpfb_service("LocationService")
     RigService = mpfb_service("RigService")
@@ -598,6 +645,24 @@ def assert_head_still(contract, body):
     print(f"build_base: head untouched by body morphs: OK ({np.count_nonzero(head)} head vertices)")
 
 
+def capture_body_shapes(contract, body, hair):
+    """Gives a hairstyle the Body's body-shape keys (capture_shape_keys): hair follows the body under it.
+    Runs once the helpers are deleted, so the hair binds to the Body's own surface: bob01, braid01,
+    long01 and ponytail01 are fitted to MakeHuman's hair helper, which the body targets leave in place
+    (and Surface Deform does not bind long01 to the full mesh at all). Every key keeps the basis on the
+    vertices with head weight >= HEAD_WEIGHT_STILL: body morphs never move the head (spec §7), nor what
+    moves with it alone, though such a vertex may be bound to the neck's faces, which they do move."""
+    names = contract["bodyTargets"]
+    capture_shape_keys(body, hair, names)
+    head = head_weights(hair) >= HEAD_WEIGHT_STILL
+    keys = hair.data.shape_keys.key_blocks
+    basis = coords_array(keys["Basis"].data)
+    for name in names:
+        coords = coords_array(keys[name].data)
+        coords[head] = basis[head]
+        keys[name].data.foreach_set("co", coords.astype(np.float32).ravel())
+
+
 def delete_helper_vertices(basemesh):
     """Deletes the helper and joint-cube vertices with bmesh, which keeps any shape-key layers."""
     helpers = helper_vertices(basemesh)
@@ -853,6 +918,61 @@ def set_alpha_modes(contract, basemesh, proxies):
             make_opaque(material)
 
 
+def export_hair(rig, hair, path):
+    """Writes the rig and one hairstyle as a binary glTF at path: its mesh and material named HAIR, the
+    alpha clipped (alphaMode MASK), skinned, with its shape keys, no animations, images embedded. The
+    shape keys are exported without normals, which would double the morph data and put long01 and
+    braid01 over their budget: under a body morph the hair keeps its rest normals."""
+    hair.name = hair.data.name = HAIR
+    material = single_material(hair)
+    material.name = HAIR
+    make_alpha_clip(material)
+    activate(hair)
+    rig.select_set(True)
+    result = bpy.ops.export_scene.gltf(
+        filepath=str(path),
+        export_format="GLB",
+        use_selection=True,
+        export_skins=True,
+        export_morph=True,
+        export_morph_normal=False,
+        # Dense: the exporter's sparse targets keep every vertex not exactly still, Surface Deform's float
+        # noise included; build-base.ts makes them sparse within 1e-6.
+        export_try_sparse_sk=False,
+        export_animations=False,
+    )
+    if result != {"FINISHED"}:
+        raise RuntimeError(f"glTF export of {path.name}: {result}")
+
+
+def delete_object(obj):
+    """Deletes obj with its mesh, materials and their images, so that nothing of it is left to export."""
+    mesh = obj.data
+    materials = [slot.material for slot in obj.material_slots if slot.material]
+    images = {
+        node.image
+        for material in materials
+        for node in material.node_tree.nodes
+        if node.type == "TEX_IMAGE" and node.image
+    }
+    bpy.data.objects.remove(obj, do_unlink=True)
+    bpy.data.meshes.remove(mesh)
+    for material in materials:
+        bpy.data.materials.remove(material)
+    for image in images:
+        bpy.data.images.remove(image)
+
+
+def export_hairstyles(rig, hair, out):
+    """Exports each hairstyle (export_hair) as <out>/<id>.glb and deletes it from the scene."""
+    out.mkdir(exist_ok=True)
+    for name, obj in hair.items():
+        vertices = len(obj.data.vertices)
+        export_hair(rig, obj, out / f"{name}.glb")
+        delete_object(obj)
+        print(f"build_base: wrote {out / f'{name}.glb'} ({vertices} vertices)")
+
+
 def snake_case(name):
     """A VRM camelCase name (leftUpperArm, blinkLeft) as the VRM add-on's property name (left_upper_arm)."""
     return "".join("_" + c.lower() if c.isupper() else c for c in name)
@@ -911,14 +1031,19 @@ def main():
     set_skin(basemesh)
     rig = add_rig(basemesh)
     proxies = add_proxies(basemesh)
+    hair = add_hair(basemesh)
     meshes = [basemesh, *proxies.values()]
 
     apply_t_pose(rig)
-    bake_pose_as_rest(rig, meshes)
+    bake_pose_as_rest(rig, [*meshes, *hair.values()])
     bake_expressions(contract, basemesh, proxies)
     meta = bake_body_shapes(contract, basemesh)
     removed = delete_helper_vertices(basemesh)
     print(f"build_base: removed {removed} helper vertices")
+    for obj in hair.values():
+        capture_body_shapes(contract, basemesh, obj)
+    # The rest of the build sees the scene it would without the hairstyles.
+    export_hairstyles(rig, hair, args.work / "hair")
     assert_head_still(contract, basemesh)
     bake_maps(contract, basemesh, rig, args.work)
     write_eye_textures(args.work)

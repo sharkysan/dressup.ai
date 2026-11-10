@@ -1,0 +1,11 @@
+{
+  "id": "short02",
+  "name": "Short textured",
+  "tags": {
+    "length": "short",
+    "volume": "medium",
+    "bangs": false,
+    "parting": "none"
+  },
+  "license": "CC0-1.0"
+}

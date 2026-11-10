@@ -1,0 +1,11 @@
+{
+  "id": "short03",
+  "name": "Short side-swept",
+  "tags": {
+    "length": "short",
+    "volume": "medium",
+    "bangs": true,
+    "parting": "left"
+  },
+  "license": "CC0-1.0"
+}

@@ -1,0 +1,11 @@
+{
+  "id": "bob01",
+  "name": "Side-swept bob",
+  "tags": {
+    "length": "medium",
+    "volume": "medium",
+    "bangs": true,
+    "parting": "left"
+  },
+  "license": "CC0-1.0"
+}

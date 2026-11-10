@@ -1,0 +1,11 @@
+{
+  "id": "afro01",
+  "name": "Short afro",
+  "tags": {
+    "length": "short",
+    "volume": "high",
+    "bangs": false,
+    "parting": "none"
+  },
+  "license": "CC0-1.0"
+}

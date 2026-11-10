@@ -2,6 +2,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // Integration test of the built base (npm run assets:base); skipped until the build has run.
 import fs from 'node:fs';
+import path from 'node:path';
 import { Matrix4, Quaternion, Vector3 } from 'three';
 import {
   ALL_BODY_TARGETS,
@@ -12,7 +13,9 @@ import {
 } from '../../src/avatar/baseContract';
 import { avatarScale, bodyInfluences, groundOffset } from '../../src/avatar/body';
 import { BODY_MORPHS, defaultParams, type AvatarParams } from '../../src/catalog/params';
+import { HAIR_BUDGET_BYTES } from '../../tools/base/buildHair';
 import { validateBase } from '../../tools/base/validateBase';
+import { jointNames, validateHair } from '../../tools/base/validateHair';
 import { readAccessor } from '../../tools/glb/accessors';
 import { readGlb } from '../../tools/glb/glb';
 import { findHumanBoneNode } from '../../tools/glb/humanoid';
@@ -20,6 +23,20 @@ import type { GlbDoc } from '../../tools/glb/types';
 
 const BUILT = 'public/assets/base/base.vrm';
 const META = 'public/assets/base/base.json';
+const HAIR_DIR = 'public/assets/hair';
+// MakeHuman's stock hairstyles (build_base.py HAIRSTYLES).
+const HAIRSTYLES = [
+  'afro01',
+  'bob01',
+  'bob02',
+  'braid01',
+  'long01',
+  'ponytail01',
+  'short01',
+  'short02',
+  'short03',
+  'short04',
+];
 // The meshes that carry the expression morph targets: everything but the eyeballs.
 const EXPRESSION_MESHES = [
   BODY_MESH,
@@ -188,5 +205,83 @@ describe.skipIf(!fs.existsSync(BUILT))('built base (public/assets/base/base.vrm)
     const head = findHumanBoneNode(doc.json, 'head');
     expect(head).toBeGreaterThanOrEqual(0);
     expect(sum / count).toBeGreaterThan(worldPosition(doc, head).z);
+  });
+});
+
+const hairFile = (id: string) => path.join(HAIR_DIR, `${id}.glb`);
+
+/** Each vertex's skin weight on the joint named `bone` (0 where it has none), over the mesh's primitives. */
+function boneWeights(doc: GlbDoc, bone: string): number[] {
+  const node = doc.json.nodes.find((n: any) => n.mesh !== undefined && n.skin !== undefined);
+  const joint = doc.json.skins[node.skin].joints.findIndex(
+    (j: number) => doc.json.nodes[j].name === bone,
+  );
+  const weights: number[] = [];
+  for (const p of doc.json.meshes[node.mesh].primitives) {
+    const count = doc.json.accessors[p.attributes.POSITION].count;
+    const ofVertex = new Array<number>(count).fill(0);
+    for (let set = 0; p.attributes[`JOINTS_${set}`] !== undefined; set++) {
+      const joints = readAccessor(doc, p.attributes[`JOINTS_${set}`]);
+      const accessor = doc.json.accessors[p.attributes[`WEIGHTS_${set}`]];
+      const values = readAccessor(doc, p.attributes[`WEIGHTS_${set}`]);
+      // Normalised unsigned byte or short weights, or floats.
+      const scale =
+        accessor.componentType === 5121 ? 255 : accessor.componentType === 5123 ? 65535 : 1;
+      for (let i = 0; i < joints.length; i++) {
+        if (joints[i] === joint) ofVertex[Math.floor(i / 4)]! += values[i]! / scale;
+      }
+    }
+    weights.push(...ofVertex);
+  }
+  return weights;
+}
+
+/** How far the morph target `name` moves each vertex of the doc's one mesh, over its primitives. */
+function moved(doc: GlbDoc, name: string): number[] {
+  const found = doc.json.meshes[0];
+  const target = (found.extras?.targetNames ?? []).indexOf(name);
+  if (target < 0) throw new Error(`${found.name} has no target ${name}`);
+  const distances: number[] = [];
+  for (const p of found.primitives) {
+    const delta = readAccessor(doc, p.targets[target].POSITION);
+    for (let i = 0; i < delta.length; i += 3) {
+      distances.push(Math.hypot(delta[i]!, delta[i + 1]!, delta[i + 2]!));
+    }
+  }
+  return distances;
+}
+
+// Built with the base by npm run assets:base. public/assets/hair may also hold untracked files of other
+// origins, so the built base gates these tests, not that directory.
+describe.skipIf(!fs.existsSync(BUILT))('built hairstyles (public/assets/hair)', () => {
+  const bones = fs.existsSync(BUILT)
+    ? jointNames(readGlb(new Uint8Array(fs.readFileSync(BUILT))))
+    : [];
+  const read = (id: string) => readGlb(new Uint8Array(fs.readFileSync(hairFile(id))));
+
+  test('every stock hairstyle is built', () => {
+    expect(HAIRSTYLES.filter((id) => !fs.existsSync(hairFile(id)))).toEqual([]);
+  });
+
+  test.each(HAIRSTYLES)('%s is within its budget and valid against the base bones', (id) => {
+    expect(fs.statSync(hairFile(id)).size).toBeLessThanOrEqual(HAIR_BUDGET_BYTES);
+    expect(validateHair(read(id), bones)).toEqual([]);
+  });
+
+  // Review Focus 2: body morphs never move the head, nor the hair that moves with the head alone.
+  test.each(HAIRSTYLES)('%s: no body target moves a vertex weighted wholly to the head', (id) => {
+    const doc = read(id);
+    const head = boneWeights(doc, 'head').map((w) => w >= 0.999);
+    expect(head.some(Boolean)).toBe(true);
+    for (const name of ALL_BODY_TARGETS) {
+      const most = Math.max(0, ...moved(doc, name).filter((_, v) => head[v]));
+      expect(most, name).toBeLessThanOrEqual(1e-6);
+    }
+  });
+
+  test('long01 follows the body: the shoulders or weight morph moves it by more than 1 mm', () => {
+    const doc = read('long01');
+    const most = Math.max(...moved(doc, 'body_shoulders_max'), ...moved(doc, 'body_weight_max'));
+    expect(most).toBeGreaterThan(0.001);
   });
 });

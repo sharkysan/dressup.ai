@@ -15,7 +15,7 @@
     "e2e": "playwright test",
     "lineup": "tsx tools/lineup.ts",
     "ci": "npm run lint && npm run typecheck && npm test && npm run test:blender && npm run build && npm run e2e",
-    "assets:base": "tsx tools/build-base.ts --out public/assets/base",
+    "assets:base": "tsx tools/build-base.ts --out public/assets/base --hair-out public/assets/hair",
     "assets": "npm run assets:base && npm run assets:catalog",
     "assets:dev": "npm run blender:setup && npm run assets:models && npm run assets",
     "assets:catalog": "tsx tools/build-catalog.ts --source assets/source --public public/assets --out public/assets/catalog.json",

@@ -1,0 +1,11 @@
+{
+  "id": "ponytail01",
+  "name": "Ponytail",
+  "tags": {
+    "length": "long",
+    "volume": "low",
+    "bangs": false,
+    "parting": "none"
+  },
+  "license": "CC0-1.0"
+}

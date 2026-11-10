@@ -1,0 +1,11 @@
+{
+  "id": "bob02",
+  "name": "Bob with fringe",
+  "tags": {
+    "length": "medium",
+    "volume": "medium",
+    "bangs": true,
+    "parting": "left"
+  },
+  "license": "CC0-1.0"
+}

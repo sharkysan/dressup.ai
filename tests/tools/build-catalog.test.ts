@@ -52,3 +52,17 @@ test('fails naming the id when a hair meta.json has no built asset', () => {
   );
   expect(build).toThrow(/hair_ghost/);
 });
+
+test('lists a hair sidecar with its built file, without the sidecar licence', () => {
+  const { tmp, build } = tmpDirs('kiss-cat-hair-');
+  const tags = { length: 'long', volume: 'low', bangs: false, parting: 'center' } as const;
+  fs.mkdirSync(path.join(tmp, 'source', 'hair', 'x'), { recursive: true });
+  fs.writeFileSync(
+    path.join(tmp, 'source', 'hair', 'x', 'meta.json'),
+    JSON.stringify({ id: 'x', name: 'X', tags, license: 'CC0-1.0' }),
+  );
+  fs.mkdirSync(path.join(tmp, 'public', 'hair'));
+  fs.writeFileSync(path.join(tmp, 'public', 'hair', 'x.glb'), '');
+  expect(build().hair).toEqual([{ id: 'x', name: 'X', url: '/assets/hair/x.glb', tags }]);
+  expect(fs.readFileSync(path.join(tmp, 'catalog.json'), 'utf8')).not.toContain('license');
+});

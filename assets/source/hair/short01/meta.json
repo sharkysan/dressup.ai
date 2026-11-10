@@ -1,0 +1,11 @@
+{
+  "id": "short01",
+  "name": "Short crop",
+  "tags": {
+    "length": "short",
+    "volume": "low",
+    "bangs": false,
+    "parting": "none"
+  },
+  "license": "CC0-1.0"
+}
