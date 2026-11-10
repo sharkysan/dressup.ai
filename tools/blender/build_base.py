@@ -51,8 +51,9 @@ from bake import (  # noqa: E402
 from mpfb import mpfb_service, require_toolchain  # noqa: E402
 from targets import EXPRESSION_RECIPES, mix, parse_target, to_blender  # noqa: E402
 
-# Young adult female, the deepest of MPFB's light skins (MPFB ships only light and dark young female
-# skins; Task 6 neutralises the texture so the runtime tint sets the tone).
+# Young adult female, the deepest of MPFB's three light-skinned young female skins (young_caucasian_female,
+# young_caucasian_female2 and young_asian_female; young_african_female is its dark one). build-base.ts
+# neutralises the texture, so the runtime tint sets the tone.
 SKIN_MHMAT = "young_caucasian_female2"
 # The base's macros over MPFB's defaults (0.5 each): gender 0, female.
 BASE_MACROS = {"gender": 0.0}
