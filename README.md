@@ -29,18 +29,20 @@ Implementation plans live in `docs/superpowers/plans/`.
 
 ## Assets
 
-Binary assets are never committed. Source VRMs live under `assets/source/` (layout in
-[`assets/source/README.md`](assets/source/README.md)); the pipeline builds `public/assets/`:
+Binary assets are never committed. The realistic base is built from MakeHuman assets with Blender
+(`tools/blender`); the pipeline writes `public/assets/`:
 
 ```bash
-npm run assets:dev      # fetch the dev sample VRMs, fake morph variants, build everything
-npm run assets          # rebuild from your own sources in assets/source/
+npm run assets:dev      # blender:setup + assets:models + assets (first run; see below)
+npm run assets          # rebuild the base and catalog after the toolchain is in place
 ```
 
-`tools/build-base.ts` strips hair, neutralises skin/iris textures for runtime tinting, adds the
-eight face-shape morph pairs from `morphs/<param>.{min,max}.vrm`, stores morph targets sparsely and
-textures as WebP ≤1024². Licences for every third-party asset are listed in
-[`assets/LICENSES.md`](assets/LICENSES.md).
+The first `npm run assets:dev` downloads the project-local Blender toolchain (Blender 4.5 LTS, MPFB,
+the VRM add-on and the MakeHuman asset packs; about 900 MB) into `.blender/`, sha256-checked and
+git-ignored. Later runs reuse it. `tools/build-base.ts` runs `tools/blender/build_base.py`, then
+neutralises the skin texture for runtime tinting, stores morph targets sparsely and textures as WebP.
+Hair sources return in M3 (see [`assets/source/README.md`](assets/source/README.md)). Licences for
+every third-party asset are listed in [`assets/LICENSES.md`](assets/LICENSES.md).
 
 ## Face analysis
 
@@ -67,6 +69,6 @@ CI runs `npm run ci` on every push and pull request (`.github/workflows/ci.yml`)
 
 ```bash
 npx playwright install --with-deps chromium   # once
-./tools/fetch-placeholder-vrm.sh              # once
+npm run assets:dev                            # once; downloads ~900 MB into .blender/
 npm run ci
 ```

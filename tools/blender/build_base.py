@@ -857,6 +857,7 @@ def setup_vrm(rig):
     ext.vrm1.humanoid.pose = "restPositionPose"
     meta = ext.vrm1.meta
     meta.vrm_name = VRM_NAME
+    meta.version = "1"  # base.json version
     meta.authors.clear()
     meta.authors.add().value = VRM_AUTHOR
 
