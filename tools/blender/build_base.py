@@ -2,15 +2,15 @@
 
     tools/blender/run.sh tools/blender/build_base.py -- --contract <contract.json> --work <dir>
 
-Writes <work>/base.vrm: a MakeHuman (MPFB) female in a T-pose, game_engine rig, GAMEENGINE (plain PBR)
-materials, eyes, brows, lashes, teeth and tongue, the VRM expressions happy, relaxed, surprised and
-blinkLeft baked from faceunits01 (targets.py), the body-shape shape keys baked from MakeHuman probes
-(bake.py), every object and material named per the contract that tools/build-base.ts writes from
-src/avatar/baseContract.ts. Writes <work>/base.json: the Body's height and lowest point, and how much
-each body target changes them (baseMetaSchema); <work>/regions.png and <work>/baselayer.png, the region-ID
-map and the base layer in the Body's UV layout, and <work>/coverage.png, the texels the Body's faces cover;
-and <work>/eyes/<preset>.png, one eye texture per eye-colour preset. Exits 1 if any step or the export
-fails.
+Writes <work>/base.vrm: a MakeHuman (MPFB) female in a T-pose, nipples flattened (a modest fit under the
+base layer), game_engine rig, GAMEENGINE (plain PBR) materials, eyes, brows, lashes, teeth and tongue,
+the VRM expressions happy, relaxed, surprised and blinkLeft baked from faceunits01 (targets.py), the
+body-shape shape keys baked from MakeHuman probes (bake.py), every object and material named per the
+contract that tools/build-base.ts writes from src/avatar/baseContract.ts. Writes <work>/base.json: the
+Body's height and lowest point, and how much each body target changes them (baseMetaSchema);
+<work>/regions.png and <work>/baselayer.png, the region-ID map and the base layer in the Body's UV
+layout, and <work>/coverage.png, the texels the Body's faces cover; and <work>/eyes/<preset>.png, one
+eye texture per eye-colour preset. Exits 1 if any step or the export fails.
 """
 
 import argparse
@@ -28,7 +28,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from bake import (  # noqa: E402
     REGION_CODES,
+    REGION_OF_GROUP,
+    SHORTS,
+    UNDERSHIRT,
     anchored,
+    base_layer,
     classify_regions,
     darken,
     disc_weights,
@@ -38,7 +42,9 @@ from bake import (  # noqa: E402
     masked_delta,
     png_bytes,
     rasterise,
+    smooth_patch,
     widen,
+    widen_into,
 )
 from mpfb import mpfb_service, require_toolchain  # noqa: E402
 from targets import EXPRESSION_RECIPES, mix, parse_target, to_blender  # noqa: E402
@@ -48,6 +54,13 @@ from targets import EXPRESSION_RECIPES, mix, parse_target, to_blender  # noqa: E
 SKIN_MHMAT = "young_caucasian_female2"
 # The base's macros over MPFB's defaults (0.5 each): gender 0, female.
 BASE_MACROS = {"gender": 0.0}
+# A modest fit, so that the base layer's fitted undershirt, painted on the skin, shows no nipple geometry.
+# Every human, the base and each body probe alike, is made with these MPFB targets (data/targets/<dir>/
+# <name>.target.gz) at weight 1, and then its FLATTENED_GROUP vertices (the nipples and areolae) are
+# moved onto the surface around them: the targets alone leave a small tip, and at a weight above 1 they
+# fold the mesh.
+BASE_TARGETS = ("breast/nipple-size-decr", "breast/nipple-point-decr")
+FLATTENED_GROUP = "nipple"
 RIG = "game_engine"
 T_POSE = "game_engine_fk/t-pose.json"
 
@@ -173,10 +186,11 @@ HEAD_STILL_M = 1e-6
 # An unchanged probe must reproduce the base this closely, or every body delta is polluted.
 PROBE_TOLERANCE_M = 1e-5
 
-# The base layer (spec §3), painted over the skin at runtime: a fitted undershirt on the torso faces and
-# shorts on the pelvis faces, opaque, transparent everywhere else. 2048², the Skin texture's size.
-UNDERSHIRT_RGBA = (0xE9, 0xE6, 0xE1, 255)
-SHORTS_RGBA = (0x2F, 0x2F, 0x33, 255)
+# The base layer (spec §3), painted over the skin at runtime: a fitted undershirt over the torso and
+# shorts over the pelvis, opaque, transparent everywhere else, antialiased (bake.base_layer). 2048², the
+# Skin texture's size.
+UNDERSHIRT_RGB = (0xE9, 0xE6, 0xE1)
+SHORTS_RGB = (0x2F, 0x2F, 0x33)
 BASE_LAYER_SIZE = 2048
 # The region-ID map (spec §7): R = the region code of the face under each pixel, 0 = never hidden.
 REGIONS_SIZE = 1024
@@ -184,6 +198,16 @@ REGIONS_SIZE = 1024
 # in the pelvis vertex group; midline vertices are within MIDLINE_M of x = 0.
 HEM_BELOW_CROTCH_M = 0.08
 MIDLINE_M = 1e-4
+# The base layer's waist, where the undershirt meets the shorts: the top of the pelvis vertex group on
+# the front midline, the highest front-midline vertex whose pelvis weight is still WAIST_PELVIS_WEIGHT (the
+# weight fades out over the belly; > 0 it reaches the lower ribs). On the base that is 1.008 m, the ring
+# just above the navel (0.948 to 0.990 m): the weight morph lifts the belly below the navel by up to 9 mm,
+# which would bend a waist line there into a peak.
+WAIST_PELVIS_WEIGHT = 0.05
+# The undershirt's neckline: NECKLINE_BELOW_M below the lowest front-midline vertex whose neck weight
+# (neck_01 + head: on the front, the head's weight comes in before neck_01's alone reaches 0.5) is at
+# least 0.5.
+NECKLINE_BELOW_M = 0.01
 # Pixels each map grows every UV island by into the texels no face covers, so that a sample on a UV seam
 # (the back's midline, the crotch) blends the island with itself, not with what lies outside it: without
 # it, filtering draws a line of skin down the back of the undershirt and shorts. 8 px of 2048² holds down
@@ -246,10 +270,38 @@ def clear_scene():
 
 
 def create_human(macros=None):
-    """The MakeHuman basemesh: MPFB's default macros with BASE_MACROS, then `macros`, in metres, feet on
-    the ground."""
+    """The MakeHuman basemesh: MPFB's default macros with BASE_MACROS, then `macros`, BASE_TARGETS and the
+    flattened FLATTENED_GROUP, in metres, feet on the ground."""
     macros = mpfb_service("TargetService").get_default_macro_info_dict() | BASE_MACROS | (macros or {})
-    return mpfb_service("HumanService").create_human(scale=0.1, macro_detail_dict=macros)
+    basemesh = mpfb_service("HumanService").create_human(scale=0.1, macro_detail_dict=macros)
+    load_targets(basemesh, BASE_TARGETS)
+    flatten(basemesh, FLATTENED_GROUP)
+    return basemesh
+
+
+def load_targets(basemesh, targets):
+    """Loads each MPFB target (<dir>/<name>, under MPFB's data/targets) onto basemesh at weight 1."""
+    root = Path(mpfb_service("LocationService").get_mpfb_data("targets"))
+    for target in targets:
+        mpfb_service("TargetService").load_target(basemesh, str(root / f"{target}.target.gz"), weight=1.0)
+
+
+def flatten(basemesh, group):
+    """Adds the shape key flatten-<group>, at 1, which moves the vertex group's vertices on each side of
+    the body, from the current shape (the mix of basemesh's shape keys), onto the smooth surface around
+    them (bake.smooth_patch)."""
+    mix = basemesh.shape_key_add(name="mix", from_mix=True)
+    shape = coords_array(mix.data)
+    basemesh.shape_key_remove(mix)
+    edges = np.empty(2 * len(basemesh.data.edges), dtype=np.int64)
+    basemesh.data.edges.foreach_get("vertices", edges)
+    members = vertex_group_weights(basemesh, group) > 0
+    flat = shape
+    for side in (shape[:, 0] < 0, shape[:, 0] > 0):
+        flat = smooth_patch(flat, edges.reshape(-1, 2), members & side)
+    basis = coords_array(basemesh.data.shape_keys.reference_key.data)
+    add_shape_key(basemesh, f"flatten-{group}", (basis + flat - shape).astype(np.float32).ravel())
+    basemesh.data.shape_keys.key_blocks[f"flatten-{group}"].value = 1.0
 
 
 def set_skin(basemesh):
@@ -425,10 +477,7 @@ def probe(change):
     before = datablocks()
     try:
         basemesh = create_human(change.get("macros"))
-        targets = Path(mpfb_service("LocationService").get_mpfb_data("targets"))
-        for target in change.get("targets", ()):
-            path = targets / f"{target}.target.gz"
-            mpfb_service("TargetService").load_target(basemesh, str(path), weight=1.0)
+        load_targets(basemesh, change.get("targets", ()))
         apply_t_pose(add_rig(basemesh))
         remove_mask_and_subsurf(basemesh)
         evaluated = basemesh.evaluated_get(bpy.context.evaluated_depsgraph_get())
@@ -581,12 +630,40 @@ def uv_faces(mesh):
     return [loop_vertices[span] for span in spans], [uv[span] for span in spans]
 
 
+def membership(weights, region):
+    """Each vertex's soft membership of a region: its summed weight in the vertex groups (bones) that
+    bake.REGION_OF_GROUP assigns to it."""
+    return sum(column for name, column in weights.items() if REGION_OF_GROUP.get(name) == region)
+
+
+def base_layer_planes(weights, coords, hem_z):
+    """The heights that bound the base layer's garments ({hem_z, waist_z, neck_z}, bake.garments), from the
+    Body's front midline (WAIST_PELVIS_WEIGHT, NECKLINE_BELOW_M)."""
+    x, y, z = coords.T
+    midline = np.abs(x) <= MIDLINE_M
+    front = midline & (y < 0)  # MakeHuman faces -y
+    waist = z[front & (weights["pelvis"] >= WAIST_PELVIS_WEIGHT)]
+    neck = z[front & (weights["neck_01"] + weights["head"] >= 0.5)]
+    if len(waist) == 0 or len(neck) == 0:
+        raise RuntimeError("the Body's front midline has no pelvis-weighted or no neck-weighted vertex")
+    planes = {"hem_z": hem_z, "waist_z": float(waist.max()), "neck_z": float(neck.min() - NECKLINE_BELOW_M)}
+    if not planes["hem_z"] < planes["waist_z"] < planes["neck_z"]:
+        raise RuntimeError(f"base-layer planes out of order: {planes}")
+    print(
+        f"build_base: base layer waist at z {planes['waist_z']:.3f} m (top of pelvis weight "
+        f">= {WAIST_PELVIS_WEIGHT} on the front midline), neckline at z {planes['neck_z']:.3f} m "
+        f"(front-midline neck weight 0.5 at {neck.min():.3f} m)"
+    )
+    return planes
+
+
 def bake_maps(contract, body, rig, work):
-    """Writes <work>/regions.png (R = region code, REGIONS_SIZE²) and <work>/baselayer.png (undershirt and
-    shorts, BASE_LAYER_SIZE² RGBA) in the Body's UV layout: each vertex takes its dominant bone's region,
-    each face its vertices' majority (bake.py). And <work>/coverage.png (R = 255 where a face covers the
-    texel, BASE_LAYER_SIZE², the Skin texture's size): build-base.ts neutralises the skin on those texels
-    only, not on the UV gutter."""
+    """Writes <work>/regions.png (R = region code, REGIONS_SIZE²) in the Body's UV layout: each vertex
+    takes its dominant bone's region, each face its vertices' majority (bake.py). <work>/baselayer.png
+    (undershirt and shorts, BASE_LAYER_SIZE² RGBA), classified per supersample from each vertex's height
+    and torso, pelvis, thigh and neck membership, interpolated over the faces (bake.base_layer). And
+    <work>/coverage.png (R = 255 where a face covers the texel, BASE_LAYER_SIZE², the Skin texture's
+    size): build-base.ts neutralises the skin on those texels only, not on the UV gutter."""
     if contract["regions"] != REGION_CODES:
         raise RuntimeError(f"contract regions {contract['regions']} != bake.py's {REGION_CODES}")
     weights = bone_weights(body, rig)
@@ -614,10 +691,18 @@ def bake_maps(contract, body, rig, work):
     regions[..., 0] = region_map(REGIONS_SIZE)
     (work / "regions.png").write_bytes(png_bytes(regions))
 
-    codes = region_map(BASE_LAYER_SIZE)
-    layer = np.zeros((BASE_LAYER_SIZE, BASE_LAYER_SIZE, 4), dtype=np.uint8)
-    layer[codes == REGION_CODES["torso"]] = UNDERSHIRT_RGBA
-    layer[codes == REGION_CODES["pelvis"]] = SHORTS_RGBA
+    planes = base_layer_planes(weights, coords, hem_z)
+    per_vertex = np.column_stack(
+        [coords[:, 2], *(membership(weights, region) for region in ("torso", "pelvis", "thighs", "neck"))]
+    )
+    colours = {UNDERSHIRT: UNDERSHIRT_RGB, SHORTS: SHORTS_RGB}
+    layer, covered = base_layer(uvs, [per_vertex[face] for face in faces], BASE_LAYER_SIZE, planes, colours)
+    alpha = layer[..., 3]
+    print(
+        f"build_base: base layer texels: {np.count_nonzero(alpha == 255)} clothed, "
+        f"{np.count_nonzero((alpha > 0) & (alpha < 255))} antialiased"
+    )
+    layer = widen_into(layer, covered, MAP_MARGIN_PX[BASE_LAYER_SIZE])
     (work / "baselayer.png").write_bytes(png_bytes(layer))
 
     coverage = np.zeros((BASE_LAYER_SIZE, BASE_LAYER_SIZE, 3), dtype=np.uint8)
