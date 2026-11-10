@@ -104,7 +104,7 @@ Expected: the last line is `blender toolchain OK: Blender 4.5.15, MPFB 2.0.18, V
 
 - [ ] **Step 5: Verify the failure path**
 
-Run: `BLENDER_USER_RESOURCES=$(mktemp -d) tools/blender/run.sh tools/blender/smoke.py; echo "exit=$?"`
+Run: `KISS_BLENDER_USER_RESOURCES=$(mktemp -d) tools/blender/run.sh tools/blender/smoke.py; echo "exit=$?"` (env.sh never honours a caller's own `BLENDER_USER_RESOURCES`)
 Expected: a line naming MPFB as missing with "run `npm run blender:setup`", then `exit=1`.
 
 - [ ] **Step 6: Commit**

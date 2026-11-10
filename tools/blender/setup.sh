@@ -51,9 +51,39 @@ fetch() {
 }
 
 # --- Blender ---------------------------------------------------------------------------------------
-installed_blender_version() {
+# probe_blender: sets BLENDER_REPORTED to the version the installed Blender reports (empty if it is missing
+# or does not start) and BLENDER_STDERR to what it wrote to stderr, where the dynamic loader names a missing
+# shared library.
+probe_blender() {
+  local err
+  BLENDER_REPORTED='' BLENDER_STDERR=''
   [ -x "$BLENDER" ] || return 0
-  "$BLENDER" --version 2>/dev/null | awk 'NR == 1 { print $2 }'
+  err=$(mktemp)
+  BLENDER_REPORTED=$("$BLENDER" --version 2> "$err" | awk 'NR == 1 { print $2 }') || true
+  BLENDER_STDERR=$(cat "$err")
+  rm -f "$err"
+}
+
+# blender_failed: why the installed Blender does not report BLENDER_VERSION, on stderr: what it reported,
+# its stderr, and on Linux the shared libraries ldd cannot find (ci.yml's apt list may lack one).
+blender_failed() {
+  local missing
+  {
+    echo "installed Blender does not report version $BLENDER_VERSION ($BLENDER)," \
+      "it reported '$BLENDER_REPORTED'"
+    if [ -n "$BLENDER_STDERR" ]; then
+      echo "its stderr:"
+      printf '%s\n' "$BLENDER_STDERR"
+    fi
+    if [ "$(uname -s)" = Linux ]; then
+      missing=$(ldd "$BLENDER" 2>&1 | grep 'not found' || true)
+      if [ -n "$missing" ]; then
+        echo "shared libraries ldd cannot find (install them, e.g. in ci.yml's apt step):"
+        printf '%s\n' "$missing"
+      fi
+    fi
+  } >&2
+  exit 1
 }
 
 install_blender() {
@@ -87,14 +117,16 @@ install_blender() {
   fi
 }
 
-if [ "$(installed_blender_version)" = "$BLENDER_VERSION" ]; then
+probe_blender
+if [ "$BLENDER_REPORTED" = "$BLENDER_VERSION" ]; then
   echo "present: Blender $BLENDER_VERSION"
 else
-  install_blender
-  if [ "$(installed_blender_version)" != "$BLENDER_VERSION" ]; then
-    echo "installed Blender does not report version $BLENDER_VERSION ($BLENDER)" >&2
-    exit 1
+  if [ -x "$BLENDER" ]; then
+    echo "Blender at $BLENDER reports '$BLENDER_REPORTED', not $BLENDER_VERSION: reinstalling"
   fi
+  install_blender
+  probe_blender
+  [ "$BLENDER_REPORTED" = "$BLENDER_VERSION" ] || blender_failed
   echo "installed: Blender $BLENDER_VERSION"
 fi
 

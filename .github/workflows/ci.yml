@@ -19,9 +19,10 @@ jobs:
       - run: npm ci
 
       # The installed toolchain only: setup.sh skips every step whose output is present, so its
-      # downloads (~700 MB) need not be cached as well.
-      - name: Cache the Blender toolchain
-        uses: actions/cache@v4
+      # downloads (~700 MB) need not be cached as well. Restored here, saved right after setup.
+      - name: Restore the Blender toolchain
+        id: blender-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             .blender
@@ -36,7 +37,19 @@ jobs:
       - name: Set up the Blender toolchain
         run: npm run blender:setup
 
-      - name: Fetch dev sample VRMs and build assets
+      # Saved as soon as setup has run, even when it or a later step fails, so that the next run need not
+      # download again; skipped on an exact-key hit, which is saved already (a cache key is never
+      # overwritten).
+      - name: Save the Blender toolchain
+        if: always() && steps.blender-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .blender
+            !.blender/downloads
+          key: ${{ steps.blender-cache.outputs.cache-primary-key }}
+
+      - name: Build assets
         run: npm run assets:dev
 
       - name: Install Playwright Chromium
