@@ -31,8 +31,9 @@ export type HairBase = Pick<Correspondence, 'head' | 'bodyVertexCount'>;
 
 /**
  * Adds the head binding (spec §8, src/likeness/headBinding.ts) of every primitive of the mesh named
- * `mesh` as its _HEADBIND_IDX and _HEADBIND_W attributes. `parts` gives a primitive's vertices, from their
- * positions, their rigid parts (headBinding's `parts`); without it each vertex binds on its own.
+ * `mesh` as its _HEADBIND_IDX (UNSIGNED_SHORT VEC4, the 4th component 0: glTF's 4-byte alignment) and
+ * _HEADBIND_W (FLOAT VEC3) attributes, each tightly packed. `parts` gives a primitive's vertices, from
+ * their positions, their rigid parts (headBinding's `parts`); without it each vertex binds on its own.
  */
 export function addHeadBinding(
   doc: GlbDoc,
@@ -45,7 +46,7 @@ export function addHeadBinding(
   for (const primitive of found.primitives) {
     const positions = readAccessor(doc, primitive.attributes.POSITION) as Float32Array;
     const { idx, w } = headBinding(positions, head, parts?.(positions));
-    primitive.attributes[HEADBIND_IDX] = appendAccessor(doc, idx, 'VEC3', { target: ARRAY_BUFFER });
+    primitive.attributes[HEADBIND_IDX] = appendAccessor(doc, idx, 'VEC4', { target: ARRAY_BUFFER });
     primitive.attributes[HEADBIND_W] = appendAccessor(doc, w, 'VEC3', { target: ARRAY_BUFFER });
   }
 }

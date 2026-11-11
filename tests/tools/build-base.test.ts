@@ -201,11 +201,13 @@ describe.skipIf(!fs.existsSync(BUILT))('built base (public/assets/base/base.vrm)
       const p = mesh(doc, name).primitives[0];
       const idx = readAccessor(doc, p.attributes[HEADBIND_IDX]);
       const w = readAccessor(doc, p.attributes[HEADBIND_W]);
+      const vertices = w.length / 3;
       const distinct = new Set<string>();
-      for (let v = 0; v < idx.length; v += 3) {
-        distinct.add(`${idx.subarray(v, v + 3)} ${w.subarray(v, v + 3)}`);
+      for (let v = 0; v < vertices; v++) {
+        // _HEADBIND_IDX is VEC4: its 4th component is 0 and unused.
+        distinct.add(`${idx.subarray(4 * v, 4 * v + 3)} ${w.subarray(3 * v, 3 * v + 3)}`);
       }
-      return { distinct: distinct.size, vertices: idx.length / 3 };
+      return { distinct: distinct.size, vertices };
     };
     expect(bindings(MATERIALS.eyes).distinct).toBe(2);
     expect(bindings(MATERIALS.teeth).distinct).toBe(1);

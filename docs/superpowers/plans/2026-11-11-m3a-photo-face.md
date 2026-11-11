@@ -168,7 +168,7 @@
     - `boundOffsets(idx: ArrayLike<number>, w: ArrayLike<number>, full: Float32Array): Float32Array`.
     - `applyLikeness(root: Object3D, full: Float32Array | null): void`.
   - GLB attributes:
-    - `_HEADBIND_IDX`: UNSIGNED_SHORT VEC3 (Body vertex indices).
+    - `_HEADBIND_IDX`: UNSIGNED_SHORT VEC4, tightly packed (Body vertex indices in the first three components; the 4th is 0 and unused, for glTF 2.0's 4-byte alignment of vertex-attribute elements).
     - `_HEADBIND_W`: FLOAT VEC3 (weights summing to 1).
 
 - [ ] **Step 1: Write the failing tests**

@@ -7,7 +7,12 @@ import {
 } from 'three';
 import { BODY_MESH, MATERIALS } from '../avatar/baseContract';
 import type { Correspondence } from './correspondence';
-import { HEADBIND_IDX_ATTR, HEADBIND_W_ATTR } from './headBinding';
+import {
+  HEADBIND_IDX_ATTR,
+  HEADBIND_IDX_SIZE,
+  HEADBIND_W_ATTR,
+  HEADBIND_W_SIZE,
+} from './headBinding';
 
 /** The runtime morph target that carries the likeness's head offsets (spec §7). */
 export const LIKENESS_TARGET = 'likeness';
@@ -40,25 +45,30 @@ export function expandHeadOffsets(
 
 /**
  * The offsets of a head-bound mesh (headBinding.ts): per vertex, Σ w·offset over its three bound Body
- * vertices, from `full`, the offsets of every Body vertex.
+ * vertices, from `full`, the offsets of every Body vertex. `idx` and `w` are laid out as the attributes
+ * are: four indices per vertex, of which the first three are read (the 4th is unused), and three weights.
  */
 export function boundOffsets(
   idx: ArrayLike<number>,
   w: ArrayLike<number>,
   full: Float32Array,
 ): Float32Array {
-  if (idx.length !== w.length || idx.length % 3 !== 0) {
-    throw new Error(`boundOffsets: ${idx.length} indices and ${w.length} weights`);
+  const count = w.length / HEADBIND_W_SIZE;
+  if (!Number.isInteger(count) || idx.length !== HEADBIND_IDX_SIZE * count) {
+    throw new Error(
+      `boundOffsets: ${idx.length} indices and ${w.length} weights; expected ` +
+        `${HEADBIND_IDX_SIZE} and ${HEADBIND_W_SIZE} per vertex`,
+    );
   }
-  const out = new Float32Array(idx.length);
-  for (let v = 0; v < idx.length; v += 3) {
+  const out = new Float32Array(3 * count);
+  for (let v = 0; v < count; v++) {
     for (let k = 0; k < 3; k++) {
-      const b = idx[v + k]!;
+      const b = idx[HEADBIND_IDX_SIZE * v + k]!;
       if (3 * b + 2 >= full.length) {
         throw new Error(`boundOffsets: Body vertex ${b} is past the ${full.length / 3} offsets`);
       }
-      const weight = w[v + k]!;
-      for (let c = 0; c < 3; c++) out[v + c]! += weight * full[3 * b + c]!;
+      const weight = w[HEADBIND_W_SIZE * v + k]!;
+      for (let c = 0; c < 3; c++) out[3 * v + c]! += weight * full[3 * b + c]!;
     }
   }
   return out;
@@ -127,13 +137,33 @@ function likenessOffsets(mesh: Mesh, full: Float32Array): Float32Array | null {
   const idx = geometry.getAttribute(HEADBIND_IDX_ATTR);
   const w = geometry.getAttribute(HEADBIND_W_ATTR);
   if (!idx || !w) return null;
-  return boundOffsets(vec3s(mesh, idx), vec3s(mesh, w), full);
+  return boundOffsets(
+    packed(mesh, HEADBIND_IDX_ATTR, idx, HEADBIND_IDX_SIZE),
+    packed(mesh, HEADBIND_W_ATTR, w, HEADBIND_W_SIZE),
+    full,
+  );
 }
 
-/** A head-binding attribute's values. GLTFLoader reads a tightly packed accessor as a plain attribute. */
-function vec3s(mesh: Mesh, attribute: BufferAttribute | InterleavedBufferAttribute) {
-  if ('isInterleavedBufferAttribute' in attribute || attribute.itemSize !== 3) {
-    throw new Error(`applyLikeness: ${mesh.name}'s head binding is not a packed VEC3 attribute`);
+/**
+ * A head-binding attribute's values: the indices VEC4 (spec §8: the 4th component pads the element to 4
+ * bytes), the weights VEC3. GLTFLoader reads a tightly packed accessor as a plain attribute.
+ */
+function packed(
+  mesh: Mesh,
+  name: string,
+  attribute: BufferAttribute | InterleavedBufferAttribute,
+  itemSize: number,
+) {
+  const vec = `VEC${itemSize}`;
+  if ('isInterleavedBufferAttribute' in attribute) {
+    throw new Error(
+      `applyLikeness: ${mesh.name}'s ${name} is interleaved; expected a packed ${vec}`,
+    );
+  }
+  if (attribute.itemSize !== itemSize) {
+    throw new Error(
+      `applyLikeness: ${mesh.name}'s ${name} has itemSize ${attribute.itemSize}; expected ${vec}`,
+    );
   }
   return attribute.array;
 }

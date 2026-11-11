@@ -4,13 +4,18 @@ import type { Correspondence } from './correspondence';
  * A head binding (spec §8) ties each vertex of a head-attached mesh (a hairstyle, the base's brows,
  * lashes, eyes, teeth and tongue) to its three nearest base-head vertices with inverse-distance weights,
  * so that the likeness morph can move it with the head (likenessMorph.ts). It ships as a vertex attribute
- * pair: Body vertex indices (UNSIGNED_SHORT VEC3) and their weights (FLOAT VEC3, summing to 1).
+ * pair: Body vertex indices (UNSIGNED_SHORT VEC4: the first three components; the 4th is 0 and unused,
+ * since glTF 2.0 §3.6.2.4 starts every vertex-attribute element on a 4-byte boundary and a VEC3 of shorts
+ * is 6 bytes) and their weights (FLOAT VEC3, summing to 1).
  */
 export const HEADBIND_IDX = '_HEADBIND_IDX';
 export const HEADBIND_W = '_HEADBIND_W';
 /** The same attributes on a three.js geometry: GLTFLoader lowercases custom attribute names. */
 export const HEADBIND_IDX_ATTR = '_headbind_idx';
 export const HEADBIND_W_ATTR = '_headbind_w';
+/** Components per vertex: the indices are VEC4 (the 4th 0 and unused), the weights VEC3. */
+export const HEADBIND_IDX_SIZE = 4;
+export const HEADBIND_W_SIZE = 3;
 
 /** The head vertices each vertex binds to. */
 const NEAREST = 3;
@@ -23,7 +28,8 @@ const MAX_INDEX = 0xffff;
  * The head binding of each vertex of `positions` (x y z per vertex, in the base's bind space): the three
  * head vertices nearest to it, nearest first, as Body vertex indices, with weights ∝ 1/(d + 0.1 mm),
  * normalised. With `parts` (one entry per vertex), every vertex of a part (id ≥ 0) takes the binding of
- * the part's centroid, so that the part moves rigidly; −1 binds the vertex on its own.
+ * the part's centroid, so that the part moves rigidly; −1 binds the vertex on its own. Laid out as the
+ * attributes are: `idx` four per vertex (the 4th 0), `w` three per vertex.
  */
 export function headBinding(
   positions: Float32Array,
@@ -43,11 +49,11 @@ export function headBinding(
   if (parts && parts.length !== count) {
     throw new Error(`headBinding: ${parts.length} parts for ${count} vertices`);
   }
-  const idx = new Uint16Array(3 * count);
-  const w = new Float32Array(3 * count);
+  const idx = new Uint16Array(HEADBIND_IDX_SIZE * count); // the 4th component stays 0
+  const w = new Float32Array(HEADBIND_W_SIZE * count);
   const write = (v: number, binding: Binding) => {
-    idx.set(binding.idx, 3 * v);
-    w.set(binding.w, 3 * v);
+    idx.set(binding.idx, HEADBIND_IDX_SIZE * v);
+    w.set(binding.w, HEADBIND_W_SIZE * v);
   };
 
   const centroids = new Map<number, [number, number, number, number]>(); // part → Σx, Σy, Σz, n

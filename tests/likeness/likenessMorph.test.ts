@@ -3,6 +3,8 @@ import {
   BufferGeometry,
   Float32BufferAttribute,
   Group,
+  InterleavedBuffer,
+  InterleavedBufferAttribute,
   Mesh,
   MeshStandardMaterial,
   SkinnedMesh,
@@ -29,11 +31,14 @@ test('expandHeadOffsets puts each head vertex offset at its Body vertex, zero el
   expect(() => expandHeadOffsets(Float32Array.of(1, 2, 3, 4, 5, 6), head, 3)).toThrow();
 });
 
-test('boundOffsets is Σ w·offset of the bound vertices', () => {
+test('boundOffsets is Σ w·offset of the first three indices of each VEC4', () => {
   const full = Float32Array.of(1, 0, 0, 0, 2, 0, 0, 0, 4);
-  const offsets = boundOffsets([0, 1, 2, 2, 2, 2], [0.5, 0.25, 0.25, 1, 0, 0], full);
+  // The 4th index component is unused: 0 here, and 9, past the offsets, changes nothing either.
+  const offsets = boundOffsets([0, 1, 2, 0, 2, 2, 2, 9], [0.5, 0.25, 0.25, 1, 0, 0], full);
   expect([...offsets]).toEqual([0.5, 0.5, 1, 0, 0, 4]);
-  expect(() => boundOffsets([0, 1, 3], [1, 0, 0], full)).toThrow();
+  expect(() => boundOffsets([0, 1, 3, 0], [1, 0, 0], full)).toThrow(/vertex 3/);
+  // Three indices per vertex (VEC3) is not the layout.
+  expect(() => boundOffsets([0, 1, 2], [1, 0, 0], full)).toThrow(/indices/);
 });
 
 /** The Body's four vertices; its offsets below. */
@@ -65,14 +70,15 @@ function morphed(name: string, count: number, material: string, normals = false)
 }
 
 function bind(mesh: Mesh, idx: number[], w: number[]): Mesh {
-  mesh.geometry.setAttribute(HEADBIND_IDX_ATTR, new BufferAttribute(Uint16Array.from(idx), 3));
+  mesh.geometry.setAttribute(HEADBIND_IDX_ATTR, new BufferAttribute(Uint16Array.from(idx), 4));
   mesh.geometry.setAttribute(HEADBIND_W_ATTR, new BufferAttribute(Float32Array.from(w), 3));
   return mesh;
 }
 
-const HAIR_IDX = [0, 1, 2, 3, 3, 3];
+/** VEC4 indices, as the GLB holds them: the 4th component 0 and unused. */
+const HAIR_IDX = [0, 1, 2, 0, 3, 3, 3, 0];
 const HAIR_W = [0.5, 0.25, 0.25, 1, 0, 0];
-const EYES_IDX = [0, 1, 2];
+const EYES_IDX = [0, 1, 2, 0];
 const EYES_W = [...Float32Array.of(0.2, 0.3, 0.5)]; // as the attribute holds them
 
 /**
@@ -82,7 +88,7 @@ const EYES_W = [...Float32Array.of(0.2, 0.3, 0.5)]; // as the attribute holds th
 function scene() {
   const body = morphed(BODY_MESH, BODY_VERTICES, MATERIALS.skin, true);
   const hair = bind(morphed('Hair', 2, 'Hair'), HAIR_IDX, HAIR_W);
-  const brows = bind(morphed('Brows', 1, MATERIALS.brows), [3, 3, 3], [1, 0, 0]);
+  const brows = bind(morphed('Brows', 1, MATERIALS.brows), [3, 3, 3, 0], [1, 0, 0]);
   const eyes = new Mesh(new BufferGeometry(), new MeshStandardMaterial({ name: MATERIALS.eyes }));
   eyes.geometry.setAttribute('position', new Float32BufferAttribute(vec3s(1), 3));
   bind(eyes, EYES_IDX, EYES_W);
@@ -206,6 +212,34 @@ test('a mesh with absolute morph targets is rejected, not mis-morphed, and nothi
   expect(() => applyLikeness(root, FULL)).toThrow(/morphTargetsRelative/);
   expect(body.geometry.morphAttributes.position).toHaveLength(2);
   expect(hair.geometry.morphAttributes.position).toHaveLength(2);
+});
+
+test.each([
+  [
+    'an index attribute of itemSize 3',
+    HEADBIND_IDX_ATTR,
+    Uint16Array.of(0, 1, 2, 3, 3, 3),
+    3,
+    /VEC4/,
+  ],
+  ['a weight attribute of itemSize 4', HEADBIND_W_ATTR, new Float32Array(8), 4, /VEC3/],
+] as const)(
+  '%s is rejected, naming the mesh, and nothing changes',
+  (_, name, array, itemSize, why) => {
+    const { root, body, hair } = scene();
+    hair.geometry.setAttribute(name, new BufferAttribute(array, itemSize));
+    expect(() => applyLikeness(root, FULL)).toThrow(why);
+    expect(() => applyLikeness(root, FULL)).toThrow(/Hair/);
+    expect(body.geometry.morphAttributes.position).toHaveLength(2);
+    expect(hair.geometry.morphAttributes.position).toHaveLength(2);
+  },
+);
+
+test('an interleaved head binding is rejected', () => {
+  const { root, hair } = scene();
+  const interleaved = new InterleavedBuffer(Uint16Array.from(HAIR_IDX), 4);
+  hair.geometry.setAttribute(HEADBIND_IDX_ATTR, new InterleavedBufferAttribute(interleaved, 4, 0));
+  expect(() => applyLikeness(root, FULL)).toThrow(/interleaved/);
 });
 
 test('offsets that do not cover the Body are rejected', () => {

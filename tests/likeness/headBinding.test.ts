@@ -13,8 +13,9 @@ const HEAD: Correspondence['head'] = {
   positions: [0, 0, 0, 1, 0, 0, 0.5, SIN60, 0, 0.5, 0.3, -5],
 };
 
+/** Vertex v's binding: _HEADBIND_IDX is VEC4 (its 4th component unused), _HEADBIND_W VEC3. */
 const binding = (idx: Uint16Array, w: Float32Array, v: number) => ({
-  idx: [...idx.subarray(3 * v, 3 * v + 3)],
+  idx: [...idx.subarray(4 * v, 4 * v + 3)],
   w: [...w.subarray(3 * v, 3 * v + 3)],
 });
 
@@ -27,23 +28,34 @@ test('a vertex at a head point binds to that Body vertex with weight ≈ 1', () 
 test('a vertex equidistant from three head points weighs each ≈ 1/3', () => {
   // The triangle's centre, 1/√3 m from each corner; vertex 40 is over 5 m away.
   const { idx, w } = headBinding(Float32Array.of(0.5, SIN60 / 3, 0), HEAD);
-  expect([...idx].sort()).toEqual([10, 20, 30]);
+  expect([...idx.subarray(0, 3)].sort()).toEqual([10, 20, 30]);
   for (const weight of w) expect(weight).toBeCloseTo(1 / 3, 6);
 });
 
 test('every weight triple sums to 1', () => {
   const positions = Float32Array.from({ length: 3 * 50 }, (_, i) => Math.sin(i * 12.9898) * 2);
-  const { idx, w } = headBinding(positions, HEAD);
-  expect(idx).toHaveLength(150);
+  const { w } = headBinding(positions, HEAD);
+  expect(w).toHaveLength(150);
   for (let v = 0; v < 50; v++) {
     const sum = w[3 * v]! + w[3 * v + 1]! + w[3 * v + 2]!;
     expect(Math.abs(sum - 1)).toBeLessThanOrEqual(1e-6);
   }
 });
 
+test('the indices are four per vertex, the 4th 0 (glTF 4-byte alignment); the weights three', () => {
+  const positions = Float32Array.from({ length: 3 * 50 }, (_, i) => Math.cos(i * 7.233) * 2);
+  const { idx, w } = headBinding(positions, HEAD);
+  expect(idx).toHaveLength(4 * 50);
+  expect(w).toHaveLength(3 * 50);
+  for (let v = 0; v < 50; v++) {
+    expect(idx[4 * v + 3]).toBe(0);
+    expect([10, 20, 30, 40]).toEqual(expect.arrayContaining([...idx.subarray(4 * v, 4 * v + 3)]));
+  }
+});
+
 test('the nearest head vertex comes first, the weights falling with distance', () => {
   const { idx, w } = headBinding(Float32Array.of(0.1, 0.05, 0), HEAD);
-  expect([...idx]).toEqual([10, 20, 30]);
+  expect([...idx]).toEqual([10, 20, 30, 0]);
   expect(w[0]).toBeGreaterThan(w[1]!);
   expect(w[1]).toBeGreaterThan(w[2]!);
 });

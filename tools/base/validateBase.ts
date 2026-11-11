@@ -23,9 +23,21 @@ export const HEAD_MESHES = [
   MATERIALS.tongue,
 ];
 
+const COMPONENT_TYPES: Record<number, string> = {
+  5120: 'BYTE',
+  5121: 'UNSIGNED_BYTE',
+  5122: 'SHORT',
+  5123: 'UNSIGNED_SHORT',
+  5125: 'UNSIGNED_INT',
+  5126: 'FLOAT',
+};
+const UNSIGNED_SHORT = 5123;
+const FLOAT = 5126;
+
 /**
- * The problems with the head binding (spec §8) of each primitive of `mesh`: both attributes present, one
- * entry per vertex, every index a vertex of the Body's `bodyVertexCount`.
+ * The problems with the head binding (spec §8) of each primitive of `mesh`: both attributes present,
+ * _HEADBIND_IDX UNSIGNED_SHORT VEC4 (glTF's 4-byte alignment) with a 4th component of 0 and _HEADBIND_W
+ * FLOAT VEC3, one entry per vertex, every index a vertex of the Body's `bodyVertexCount`.
  */
 export function headBindingProblems(doc: GlbDoc, mesh: any, bodyVertexCount: number): string[] {
   const problems: string[] = [];
@@ -38,21 +50,36 @@ export function headBindingProblems(doc: GlbDoc, mesh: any, bodyVertexCount: num
       return;
     }
     const vertices = doc.json.accessors[p.attributes.POSITION]?.count;
-    for (const [name, accessor] of [
-      [HEADBIND_IDX, idx],
-      [HEADBIND_W, w],
-    ]) {
-      const count = doc.json.accessors[accessor]?.count;
-      if (count !== vertices)
-        problems.push(`${where}: ${name} has ${count} entries for ${vertices} vertices`);
+    let idxFormatOk = true;
+    for (const [name, index, componentType, type] of [
+      [HEADBIND_IDX, idx, UNSIGNED_SHORT, 'VEC4'],
+      [HEADBIND_W, w, FLOAT, 'VEC3'],
+    ] as const) {
+      const accessor = doc.json.accessors[index];
+      if (accessor?.count !== vertices)
+        problems.push(`${where}: ${name} has ${accessor?.count} entries for ${vertices} vertices`);
+      if (accessor?.componentType !== componentType || accessor?.type !== type) {
+        const found = COMPONENT_TYPES[accessor?.componentType] ?? accessor?.componentType;
+        problems.push(
+          `${where}: ${name} is ${found} ${accessor?.type}, expected ${COMPONENT_TYPES[componentType]} ${type}`,
+        );
+        if (name === HEADBIND_IDX) idxFormatOk = false;
+      }
     }
+    if (!idxFormatOk) return; // the indices can't be read as VEC4s
+    const indices = readAccessor(doc, idx);
     let most = 0;
-    for (const v of readAccessor(doc, idx)) most = Math.max(most, v);
+    let padded = true;
+    for (let v = 0; v < indices.length; v += 4) {
+      most = Math.max(most, indices[v]!, indices[v + 1]!, indices[v + 2]!);
+      padded &&= indices[v + 3] === 0;
+    }
     if (most >= bodyVertexCount) {
       problems.push(
         `${where}: ${HEADBIND_IDX} indexes vertex ${most}, past the Body's ${bodyVertexCount}`,
       );
     }
+    if (!padded) problems.push(`${where}: ${HEADBIND_IDX} has a 4th component other than 0`);
   });
   return problems;
 }
