@@ -14,6 +14,7 @@ import {
   type RgbaImage,
 } from '../../src/analysis/types';
 import { hexToRgb } from '../../src/color/oklab';
+import { CANONICAL_FACE_OBJ } from '../base/canonicalFace';
 
 export type HairSpec = {
   length: 'none' | 'short' | 'medium' | 'long';
@@ -42,7 +43,7 @@ let canonical: [number, number, number][] | null = null;
 
 function loadCanonical(): [number, number, number][] {
   if (canonical) return canonical;
-  const file = path.resolve('tests/fixtures/face_model_with_iris.obj');
+  const file = path.resolve(CANONICAL_FACE_OBJ);
   canonical = fs
     .readFileSync(file, 'utf8')
     .split('\n')

@@ -1,16 +1,17 @@
 /**
  * build-base: the realistic MakeHuman base (spec §4, §7), built headlessly in Blender, → <out>/base.vrm,
  * <out>/base.json (height metadata, baseMetaSchema), <out>/baselayer.webp (the crop top and shorts,
- * painted over the skin at runtime), <out>/regions.png (region-ID map) and <out>/eyes/<preset>.webp (one
- * eye texture per eye-colour preset); and MakeHuman's stock hairstyles, skinned to the base's rig with its
- * body targets, → <hair-out>/<id>.glb.
+ * painted over the skin at runtime), <out>/regions.png (region-ID map), <out>/eyes/<preset>.webp (one
+ * eye texture per eye-colour preset) and <out>/correspondence.json (MediaPipe's face on the base, spec
+ * §12); and MakeHuman's stock hairstyles, skinned to the base's rig with its body targets, →
+ * <hair-out>/<id>.glb.
  *   tsx tools/build-base.ts --out public/assets/base --hair-out public/assets/hair
  * Steps: write the naming contract → tools/blender/build_base.py (MPFB human, rig, proxies, hairstyles,
  * T-pose, expressions, body-shape targets, hairstyle export, region, base-layer and UV-coverage maps, eye
  * textures, VRM 1.0 export, base.json) → neutral skin (measured on the covered texels), brow and lash
  * textures → texture sizes → sparse morph targets → WebP textures → prune
- * → validate against the contract, and base.json against its schema → size budget → the hairstyles
- * (base/buildHair.ts) → atomic writes.
+ * → validate against the contract, and base.json against its schema → size budget → the correspondence
+ * (base/correspondence.ts) and its review render → the hairstyles (base/buildHair.ts) → atomic writes.
  * Needs the Blender toolchain (npm run blender:setup).
  */
 import { spawnSync } from 'node:child_process';
@@ -21,6 +22,8 @@ import sharp from 'sharp';
 import { MATERIALS, baseMetaSchema, contractJson } from '../src/avatar/baseContract';
 import { avatarParamsSchema } from '../src/catalog/params';
 import { processHair } from './base/buildHair';
+import { CANONICAL_FACE_OBJ, readCanonicalFace } from './base/canonicalFace';
+import { buildCorrespondence } from './base/correspondence';
 import { validateBase } from './base/validateBase';
 import { writeAtomically } from './base/writeAtomically';
 import { cli, human, required } from './cli';
@@ -54,6 +57,8 @@ const maxTextureSize = (_image: string, material: string) =>
   material === MATERIALS.skin ? 2048 : 1024;
 const EYE_TEXTURE_SIZE = 512;
 const WEBP_QUALITY = 90;
+/** The work directory goes when the build ends; the correspondence review render is kept here. */
+const REVIEW_COPY = path.join(os.tmpdir(), 'kiss-correspondence-review.png');
 
 /**
  * Replaces each NEUTRALISE material's base-colour image (still PNG) with its neutral version. The skin
@@ -100,6 +105,7 @@ export async function buildBase(opts: {
   problems: string[];
   outputs: { file: string; bytes: number }[];
   hair: { id: string; bytes: number }[];
+  review: string;
 }> {
   const budget = opts.budgetBytes ?? BASE_BUDGET_BYTES;
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'kiss-base-'));
@@ -140,6 +146,16 @@ export async function buildBase(opts: {
     if (bytes.byteLength > budget) {
       throw new Error(`base.vrm is ${human(bytes.byteLength)}, over its ${human(budget)} budget`);
     }
+    // From the doc as shipped, so that its vertex indices are base.vrm's.
+    const { data: correspondence, review } = buildCorrespondence(
+      doc,
+      readCanonicalFace(CANONICAL_FACE_OBJ),
+    );
+    const reviewFile = path.join(work, 'correspondence-review.png');
+    await sharp(review.data, { raw: { width: review.width, height: review.height, channels: 4 } })
+      .png()
+      .toFile(reviewFile);
+    fs.copyFileSync(reviewFile, REVIEW_COPY);
     // The hairstyles are skinned to the base's bones: built once the base passes, and before it is written,
     // so that a failing hairstyle leaves the previous base and hairstyles in place.
     const hair = await processHair(work, opts.hairOut);
@@ -156,11 +172,12 @@ export async function buildBase(opts: {
       ],
       ['regions.png', fs.readFileSync(path.join(work, 'regions.png'))],
       ...(await eyeTextures(work)),
+      ['correspondence.json', new TextEncoder().encode(JSON.stringify(correspondence))],
     ]);
     fs.mkdirSync(path.join(opts.out, 'eyes'), { recursive: true });
     for (const [file, data] of files) writeAtomically(path.join(opts.out, file), data);
     const outputs = [...files].map(([file, data]) => ({ file, bytes: data.byteLength }));
-    return { bytes: bytes.byteLength, problems, outputs, hair };
+    return { bytes: bytes.byteLength, problems, outputs, hair, review: REVIEW_COPY };
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
   }
@@ -176,6 +193,7 @@ if (process.argv[1] && /build-base\.(ts|js)$/.test(process.argv[1])) {
       for (const h of r.hair) {
         console.log(`wrote ${path.join(hairOut, `${h.id}.glb`)} (${human(h.bytes)})`);
       }
+      console.log(`correspondence review render: ${r.review}`);
     })
     .catch((e) => {
       console.error(e instanceof Error ? e.message : e);
