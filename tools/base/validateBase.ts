@@ -7,9 +7,55 @@ import {
   MATERIALS,
   REQUIRED_HUMAN_BONES,
 } from '../../src/avatar/baseContract';
+import { HEADBIND_IDX, HEADBIND_W } from '../../src/likeness/headBinding';
+import { readAccessor } from '../glb/accessors';
 import type { GlbDoc } from '../glb/types';
 
-export type BaseCheck = 'vrm' | 'humanoid' | 'materials' | 'expressions' | 'bodyTargets';
+export type BaseCheck =
+  'vrm' | 'humanoid' | 'materials' | 'expressions' | 'bodyTargets' | 'headBinding';
+
+/** The base's meshes that move with the head and carry a head binding (spec §8), named as their materials. */
+export const HEAD_MESHES = [
+  MATERIALS.brows,
+  MATERIALS.eyes,
+  MATERIALS.lashes,
+  MATERIALS.teeth,
+  MATERIALS.tongue,
+];
+
+/**
+ * The problems with the head binding (spec §8) of each primitive of `mesh`: both attributes present, one
+ * entry per vertex, every index a vertex of the Body's `bodyVertexCount`.
+ */
+export function headBindingProblems(doc: GlbDoc, mesh: any, bodyVertexCount: number): string[] {
+  const problems: string[] = [];
+  mesh.primitives.forEach((p: any, i: number) => {
+    const where = `mesh ${mesh.name} primitive ${i}`;
+    const idx = p.attributes[HEADBIND_IDX];
+    const w = p.attributes[HEADBIND_W];
+    if (idx === undefined || w === undefined) {
+      problems.push(`${where} lacks a head binding (${HEADBIND_IDX} and ${HEADBIND_W})`);
+      return;
+    }
+    const vertices = doc.json.accessors[p.attributes.POSITION]?.count;
+    for (const [name, accessor] of [
+      [HEADBIND_IDX, idx],
+      [HEADBIND_W, w],
+    ]) {
+      const count = doc.json.accessors[accessor]?.count;
+      if (count !== vertices)
+        problems.push(`${where}: ${name} has ${count} entries for ${vertices} vertices`);
+    }
+    let most = 0;
+    for (const v of readAccessor(doc, idx)) most = Math.max(most, v);
+    if (most >= bodyVertexCount) {
+      problems.push(
+        `${where}: ${HEADBIND_IDX} indexes vertex ${most}, past the Body's ${bodyVertexCount}`,
+      );
+    }
+  });
+  return problems;
+}
 
 /** Validates an exported base VRM against the naming contract. Returns one line per problem; empty = valid. */
 export function validateBase(
@@ -70,6 +116,20 @@ export function validateBase(
       for (const t of ALL_BODY_TARGETS) {
         if (!targetNames.includes(t))
           problems.push(`body morph target ${t} is missing on ${BODY_MESH}`);
+      }
+    }
+  }
+
+  if (on('headBinding')) {
+    // A binding indexes the vertices of the Body's one primitive.
+    if (body?.primitives.length !== 1) {
+      problems.push(`mesh ${BODY_MESH} needs exactly one primitive for the head bindings to index`);
+    } else {
+      const bodyVertexCount = json.accessors[body.primitives[0].attributes.POSITION]?.count ?? 0;
+      for (const name of HEAD_MESHES) {
+        const mesh = json.meshes.find((m: any) => m.name === name);
+        if (!mesh) problems.push(`mesh ${name} is missing`);
+        else problems.push(...headBindingProblems(doc, mesh, bodyVertexCount));
       }
     }
   }

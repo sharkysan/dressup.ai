@@ -13,6 +13,7 @@ import {
 } from '../../src/avatar/baseContract';
 import { avatarScale, bodyInfluences, groundOffset } from '../../src/avatar/body';
 import { BODY_MORPHS, defaultParams, type AvatarParams } from '../../src/catalog/params';
+import { HEADBIND_IDX, HEADBIND_W } from '../../src/likeness/headBinding';
 import { HAIR_BUDGET_BYTES } from '../../tools/base/buildHair';
 import { validateBase } from '../../tools/base/validateBase';
 import { jointNames, validateHair } from '../../tools/base/validateHair';
@@ -194,6 +195,27 @@ describe.skipIf(!fs.existsSync(BUILT))('built base (public/assets/base/base.vrm)
     expect(maxY - minY).toBeLessThan(1.85);
   });
 
+  // Spec §8: the eyeballs, teeth and tongue follow the likeness without deforming.
+  test('each eyeball, the teeth and the tongue are bound rigidly, the brows and lashes per vertex', () => {
+    const bindings = (name: string) => {
+      const p = mesh(doc, name).primitives[0];
+      const idx = readAccessor(doc, p.attributes[HEADBIND_IDX]);
+      const w = readAccessor(doc, p.attributes[HEADBIND_W]);
+      const distinct = new Set<string>();
+      for (let v = 0; v < idx.length; v += 3) {
+        distinct.add(`${idx.subarray(v, v + 3)} ${w.subarray(v, v + 3)}`);
+      }
+      return { distinct: distinct.size, vertices: idx.length / 3 };
+    };
+    expect(bindings(MATERIALS.eyes).distinct).toBe(2);
+    expect(bindings(MATERIALS.teeth).distinct).toBe(1);
+    expect(bindings(MATERIALS.tongue).distinct).toBe(1);
+    for (const name of [MATERIALS.brows, MATERIALS.lashes]) {
+      const { distinct, vertices } = bindings(name);
+      expect(distinct, name).toBeGreaterThan(vertices / 2);
+    }
+  });
+
   test('faces +Z: the eyes are in front of the head bone', () => {
     let sum = 0;
     let count = 0;
@@ -254,18 +276,20 @@ function moved(doc: GlbDoc, name: string): number[] {
 // Built with the base by npm run assets:base. public/assets/hair may also hold untracked files of other
 // origins, so the built base gates these tests, not that directory.
 describe.skipIf(!fs.existsSync(BUILT))('built hairstyles (public/assets/hair)', () => {
-  const bones = fs.existsSync(BUILT)
-    ? jointNames(readGlb(new Uint8Array(fs.readFileSync(BUILT))))
-    : [];
+  const base = fs.existsSync(BUILT) ? readGlb(new Uint8Array(fs.readFileSync(BUILT))) : null;
+  const bones = base ? jointNames(base) : [];
+  const bodyVertexCount = base
+    ? base.json.accessors[mesh(base, BODY_MESH).primitives[0].attributes.POSITION].count
+    : 0;
   const read = (id: string) => readGlb(new Uint8Array(fs.readFileSync(hairFile(id))));
 
   test('every stock hairstyle is built', () => {
     expect(HAIRSTYLES.filter((id) => !fs.existsSync(hairFile(id)))).toEqual([]);
   });
 
-  test.each(HAIRSTYLES)('%s is within its budget and valid against the base bones', (id) => {
+  test.each(HAIRSTYLES)('%s is within its budget and valid against the base', (id) => {
     expect(fs.statSync(hairFile(id)).size).toBeLessThanOrEqual(HAIR_BUDGET_BYTES);
-    expect(validateHair(read(id), bones)).toEqual([]);
+    expect(validateHair(read(id), bones, bodyVertexCount)).toEqual([]);
   });
 
   // Review Focus 2: body morphs never move the head, nor the hair that moves with the head alone.
