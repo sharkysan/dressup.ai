@@ -25,7 +25,10 @@ export const correspondenceSchema = z
       rotation: z.array(z.number()).length(9),
       translation: vec3,
     }),
-    /** Per landmark (index = landmark): its closest point on the face, on a Body triangle. */
+    /**
+     * Per landmark (index = landmark): its point on the face, on a Body triangle: seen from the front for
+     * the lips and the base of the nose, the closest point elsewhere (spec §12).
+     */
     landmarks: z
       .array(
         z.object({

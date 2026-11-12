@@ -133,7 +133,7 @@
      - Base side: for each eyeball of the `Eyes` mesh (vertices split by sign of x; +x is the left eye), the vertex with max z; and the Body nose tip.
      - `canonicalToBase` = the Umeyama similarity (with scale) from the three canonical anchors to the three base anchors. Put `umeyama(src, dst): Similarity` and `applySimilarity` in `src/likeness/similarity.ts`; Task 3 reuses them.
      - There is no ICP refinement.
-  4. **Projection.** Each transformed canonical landmark 0..467 goes to its closest point on the face island's triangles. Record `triangle`, `bary`, `position`, and `uv` (bary-interpolated TEXCOORD_0).
+  4. **Projection.** Each transformed canonical landmark 0..467 goes to its closest point on the face island's triangles. (Ruling R20 changed this for the lips and the base of the nose: they go along the view direction instead, as spec §12 describes, because closest-point projection collapsed the upper lip onto the lip crease.) Record `triangle`, `bary`, `position`, and `uv` (bary-interpolated TEXCOORD_0).
   5. **`triangles`.** The OBJ faces whose three indices are all < 468.
   6. **`faceUvRect`.** The bounding box of the landmark uvs, made square (side = 1.1 × its longer edge, about the same centre), then shifted (not shrunk) to lie inside [0,1]².
   7. **`zero`.** z_ear is the mean base z of the projected landmarks 234 and 454. Take every head vertex with z < z_ear − 0.01, subsampled by a 0.02 m voxel grid (the first vertex in index order per voxel).
@@ -278,7 +278,10 @@
   - They use a synthetic correspondence whose landmark uvs are the canonical OBJ uvs (`readCanonicalFace`), with `faceUvRect = { u: 0, v: 0, size: 1 }`, and a `synthFace` photo with known skin, hair, iris and lip colours.
   - **Affine exactness.** A one-triangle correspondence and a photo with a linear horizontal gradient → the texels inside the destination triangle carry the gradient mapped affinely (±2/255).
   - **Skin.** The texel at landmark 4's `uvToTexel` is within ΔE_OK 0.03 of the synthetic skin colour.
-  - **Eyes and mouth.** The texels at the centroids of the destination polygons `FACE_MASKS.eyeR`, `eyeL` and `innerMouth` are filled. They are within ΔE_OK 0.05 of skin, not iris or lip colour.
+  - **Eyes and mouth** (as amended by rulings R13 and R18). The texels at the centroids of the destination polygons `FACE_MASKS.eyeR`, `eyeL` and `innerMouth` are filled from their surroundings.
+    - The eyes are filled with skin: each centroid is within ΔE_OK 0.05 of skin, not iris or lip colour, and so is every texel within `eyeDilatePx` of the lids (the lashes go).
+    - The inner mouth is filled with lip: in the UV layout it is a sliver between the lips, so its centroid is within ΔE_OK 0.05 of the projected upper lip, not teeth or skin.
+    - The lips around an open mouth carry no teeth: every lip texel outside the inner-mouth polygon, within 16 texels of it, is within ΔE_OK 0.05 of the projected lip.
   - **Bangs.** A synthetic photo with hair over the upper forehead → the forehead texels under the hair are within ΔE_OK 0.05 of skin.
   - **De-light.** A photo multiplied by a left-to-right brightness ramp (0.6 → 1.4) → the mean linear luminance of the left and right cheek patches (`LM.cheekPatchR`/`L`) differs by < 5 % after `projectFace`. Before de-lighting it differs by > 50 %.
   - **Alpha.**
@@ -382,7 +385,7 @@
   - **`GATES`** becomes `{ minFaceWidthPx: 120, maxYawDeg: 20, maxPitchDeg: 20, minProjectionFaceWidthPx: 256 }`.
   - **`AnalyzeResult`** gains:
     - `likeness: Likeness | null`
-    - `likenessGate: 'ok' | 'too_small'`
+    - `likenessGate: 'ok' | 'too_small' | 'failed'` (`'failed'` added by ruling R19: a likeness that fails to build leaves the params with the default face, and `analyzePhoto` does not reject)
     - `likenessDebug: LikenessDebug | null`
   - **`analyzePhoto`**:
     - It loads the correspondence with the models.
