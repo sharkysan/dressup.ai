@@ -1,5 +1,13 @@
 import { defaultParams } from '../../src/catalog/params';
+import type { Likeness } from '../../src/likeness/types';
 import { useAppStore } from '../../src/store/useAppStore';
+
+const likeness: Likeness = {
+  version: 1,
+  faceTexture: new Blob([new Uint8Array([1])], { type: 'image/webp' }),
+  headOffsets: new Float32Array(6),
+  sourceSkin: '#c68642',
+};
 
 beforeEach(() => {
   useAppStore.getState().reset();
@@ -60,4 +68,26 @@ test('setAvatarMetrics stores head height and overall height; reset clears them'
   expect(useAppStore.getState().avatarMetrics).toEqual({ headY: 1.42, height: 1.6 });
   useAppStore.getState().reset();
   expect(useAppStore.getState().avatarMetrics).toBeNull();
+});
+
+test('starts without a likeness', () => {
+  expect(useAppStore.getState().likeness).toBeNull();
+});
+
+test('setLikeness sets the likeness and the photo face; null the default face', () => {
+  useAppStore.getState().setParams({ skin: '#112233' });
+  useAppStore.getState().setLikeness(likeness);
+  expect(useAppStore.getState().likeness).toBe(likeness);
+  expect(useAppStore.getState().params.face).toBe('photo');
+  expect(useAppStore.getState().params.skin).toBe('#112233');
+  useAppStore.getState().setLikeness(null);
+  expect(useAppStore.getState().likeness).toBeNull();
+  expect(useAppStore.getState().params.face).toBe('default');
+});
+
+test('reset clears the likeness', () => {
+  useAppStore.getState().setLikeness(likeness);
+  useAppStore.getState().reset();
+  expect(useAppStore.getState().likeness).toBeNull();
+  expect(useAppStore.getState().params.face).toBe('default');
 });

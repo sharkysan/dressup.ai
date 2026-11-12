@@ -17,6 +17,7 @@ import {
   applyLikeness,
   boundOffsets,
   expandHeadOffsets,
+  likenessStatus,
 } from '../../src/likeness/likenessMorph';
 
 test('expandHeadOffsets puts each head vertex offset at its Body vertex, zero elsewhere', () => {
@@ -204,6 +205,18 @@ test('null after a likeness sets its influence to 0 and shows the brows', () => 
   applyLikeness(root, FULL);
   expect(body.morphTargetInfluences).toEqual([0.3, 0.7, 1]);
   expect(brows.visible).toBe(false);
+});
+
+test('likenessStatus lists the meshes showing the likeness, and whether the brows show', () => {
+  const { root } = scene();
+  expect(likenessStatus(root)).toEqual({ meshes: [], browsVisible: true });
+  applyLikeness(root, FULL);
+  expect(likenessStatus(root)).toEqual({
+    meshes: [BODY_MESH, 'Hair', 'Brows', ''],
+    browsVisible: false,
+  });
+  applyLikeness(root, null);
+  expect(likenessStatus(root)).toEqual({ meshes: [], browsVisible: true });
 });
 
 test('a mesh with absolute morph targets is rejected, not mis-morphed, and nothing changes', () => {

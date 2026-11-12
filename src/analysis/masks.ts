@@ -89,3 +89,62 @@ export function expandBox(box: Box, factor: number, width: number, height: numbe
   const y1 = Math.min(height, cy + h / 2);
   return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
 }
+
+/**
+ * The 0/1 mask, at a crop's pixels, of where a category mask over the full-resolution photo equals
+ * `category`. The crop shows `rect` (full-resolution pixels) at `scale`, so crop pixel (x, y) is photo
+ * point rect + (x + ½, y + ½) / scale, which samples the mask nearest.
+ */
+export function maskForCrop(
+  mask: CategoryMask,
+  category: number,
+  rect: Box,
+  scale: number,
+  full: { width: number; height: number },
+  crop: { width: number; height: number },
+): Uint8Array {
+  const cell = (at: number, photoSize: number, maskSize: number) =>
+    Math.min(maskSize - 1, Math.max(0, Math.floor((at / photoSize) * maskSize)));
+  const columns = Int32Array.from({ length: crop.width }, (_, x) =>
+    cell(rect.x + (x + 0.5) / scale, full.width, mask.width),
+  );
+  const out = new Uint8Array(crop.width * crop.height);
+  for (let y = 0; y < crop.height; y++) {
+    const row = cell(rect.y + (y + 0.5) / scale, full.height, mask.height) * mask.width;
+    for (let x = 0; x < crop.width; x++) {
+      out[y * crop.width + x] = mask.data[row + columns[x]!] === category ? 1 : 0;
+    }
+  }
+  return out;
+}
+
+/**
+ * The mask grown by `r` pixels: a pixel is set if any pixel within r of it on both axes is (a square
+ * of side 2r + 1). Separable, with a running count along each row, then each column.
+ */
+export function dilateMask(mask: Uint8Array, width: number, height: number, r: number): Uint8Array {
+  if (r <= 0) return mask.slice();
+  const rows = new Uint8Array(mask.length);
+  for (let y = 0; y < height; y++) dilateLine(mask, rows, y * width, 1, width, r);
+  const out = new Uint8Array(mask.length);
+  for (let x = 0; x < width; x++) dilateLine(rows, out, x, width, height, r);
+  return out;
+}
+
+/** One line of dilateMask: `n` pixels from `start`, `stride` apart; `count` the set ones within r. */
+function dilateLine(
+  from: Uint8Array,
+  to: Uint8Array,
+  start: number,
+  stride: number,
+  n: number,
+  r: number,
+): void {
+  let count = 0;
+  for (let i = 0; i < Math.min(r, n); i++) count += from[start + i * stride]!;
+  for (let i = 0; i < n; i++) {
+    if (i + r < n) count += from[start + (i + r) * stride]!;
+    if (i - r - 1 >= 0) count -= from[start + (i - r - 1) * stride]!;
+    to[start + i * stride] = count > 0 ? 1 : 0;
+  }
+}

@@ -88,5 +88,42 @@ test.describe('with models', () => {
     const params = await page.evaluate(() => window.__kiss!.store.getState().params);
     expect(params.version).toBe(2);
     expect(params.skin).toMatch(/^#[0-9a-f]{6}$/i);
+
+    // The photo face, when the face passes the projection gate (≥ 256 px wide at full resolution).
+    const gate = await page.getByTestId('likeness-gate').textContent();
+    const likeness = await page.evaluate(async () => {
+      const l = window.__kiss!.store.getState().likeness;
+      if (!l) return null;
+      const texture = await createImageBitmap(l.faceTexture);
+      const corr = (await (await fetch('/assets/base/correspondence.json')).json()) as {
+        head: { vertices: number[] };
+      };
+      let maxOffset = 0;
+      for (let i = 0; i < l.headOffsets.length; i += 3) {
+        const [x, y, z] = [l.headOffsets[i]!, l.headOffsets[i + 1]!, l.headOffsets[i + 2]!];
+        maxOffset = Math.max(maxOffset, Math.hypot(x, y, z));
+      }
+      const result = {
+        texture: [texture.width, texture.height],
+        type: l.faceTexture.type,
+        offsets: l.headOffsets.length,
+        headVertices: corr.head.vertices.length,
+        maxOffsetMm: 1000 * maxOffset,
+      };
+      texture.close();
+      return result;
+    });
+    if (gate === strings.analysis.likenessTooSmall) {
+      expect(likeness).toBeNull();
+      expect(params.face).toBe('default');
+      return;
+    }
+    expect(gate).toBe(strings.analysis.likenessOk);
+    expect(likeness).not.toBeNull();
+    expect(params.face).toBe('photo');
+    expect(likeness!.texture).toEqual([1024, 1024]);
+    expect(['image/webp', 'image/png']).toContain(likeness!.type);
+    expect(likeness!.offsets).toBe(3 * likeness!.headVertices);
+    expect(likeness!.maxOffsetMm).toBeLessThanOrEqual(18);
   });
 });

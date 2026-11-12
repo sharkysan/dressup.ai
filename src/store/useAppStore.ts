@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Catalog } from '../catalog/catalog';
 import type { AvatarMetrics } from '../scene/cameraPose';
 import { defaultParams, type AvatarParams, type OutfitItem, type Slot } from '../catalog/params';
+import type { Likeness } from '../likeness/types';
 
 export type AvatarStatus = 'loading' | 'ready' | 'error';
 
@@ -17,6 +18,10 @@ export type AppState = {
   attachedHair: string;
   setAttachedHair: (id: string) => void;
   setParams: (patch: Partial<AvatarParams>) => void;
+  /** The photo face on this device (spec §5), in memory only (§3); null shows the default face. */
+  likeness: Likeness | null;
+  /** Sets the likeness, and `params.face` to match: 'photo' with one, 'default' without. */
+  setLikeness: (likeness: Likeness | null) => void;
   setOutfitItem: (slot: Slot, item: OutfitItem | null) => void;
   setAvatarStatus: (status: AvatarStatus, error?: string) => void;
   reset: () => void;
@@ -29,6 +34,7 @@ const initialState = {
   catalog: null as Catalog | null,
   avatarMetrics: null as AvatarMetrics | null,
   attachedHair: 'none',
+  likeness: null as Likeness | null,
 };
 
 /** `full` (dress/jumpsuit) occupies top+bottom, so the three can never coexist (spec §5). */
@@ -47,6 +53,9 @@ export const useAppStore = create<AppState>()((set) => ({
   ...initialState,
 
   setParams: (patch) => set((s) => ({ params: { ...s.params, ...patch } })),
+
+  setLikeness: (likeness) =>
+    set((s) => ({ likeness, params: { ...s.params, face: likeness ? 'photo' : 'default' } })),
 
   setOutfitItem: (slot, item) =>
     set((s) => {

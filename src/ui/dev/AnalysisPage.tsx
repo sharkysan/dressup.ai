@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ImgHTMLAttributes } from 'react';
 import {
   analyzePhoto,
   AnalysisError,
@@ -6,6 +6,8 @@ import {
   type AnalyzeResult,
 } from '../../analysis/analyze';
 import { downloadBlob } from '../../export/download';
+import { loadCorrespondence } from '../../likeness/correspondence';
+import { FACE_TEXTURE_SIZE } from '../../likeness/faceTexture';
 import { Viewer } from '../../scene/Viewer';
 import { useAppStore } from '../../store/useAppStore';
 import { strings } from '../strings';
@@ -14,13 +16,14 @@ import { PhotoCanvas } from './PhotoCanvas';
 type Status = 'idle' | 'loading' | 'analysing' | 'done' | 'error';
 
 /**
- * Developer page (#analysis): photo → params with every intermediate visible (spec §13).
+ * Developer page (#analysis): photo → params and likeness with every intermediate visible (spec §13).
  * Records landmark/mask fixtures (no pixels).
  */
 export function AnalysisPage() {
   const catalog = useAppStore((s) => s.catalog);
   const params = useAppStore((s) => s.params);
   const setParams = useAppStore((s) => s.setParams);
+  const setLikeness = useAppStore((s) => s.setLikeness);
   const [status, setStatus] = useState<Status>('idle');
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +45,7 @@ export function AnalysisPage() {
       });
       setResult(res);
       setParams(res.params);
+      setLikeness(res.likeness);
       setStatus('done');
     } catch (e) {
       setStatus('error');
@@ -125,8 +129,15 @@ export function AnalysisPage() {
               faceBox={result.faceBox}
             />
             <Attributes result={result} />
+            <LikenessPanel result={result} />
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-              <button type="button" onClick={() => setParams(result.params)}>
+              <button
+                type="button"
+                onClick={() => {
+                  setParams(result.params);
+                  setLikeness(result.likeness);
+                }}
+              >
                 Apply to avatar
               </button>
               <button type="button" onClick={recordFixture}>
@@ -190,6 +201,135 @@ function Attributes({ result }: { result: AnalyzeResult }) {
         </ol>
       </div>
     </div>
+  );
+}
+
+/**
+ * The likeness: the projection gate, and with a likeness its face texture, the head fit (residuals and
+ * a front view of the aligned landmarks over the canonical ones) and the step timings, against the
+ * 400 ms budget for fit + projection.
+ */
+function LikenessPanel({ result }: { result: AnalyzeResult }) {
+  const { likeness, likenessGate, likenessDebug: debug } = result;
+  return (
+    <div style={{ marginTop: 10 }}>
+      <b>Photo face</b>
+      <div data-testid="likeness-gate">
+        {likenessGate === 'ok' ? strings.analysis.likenessOk : strings.analysis.likenessTooSmall}
+      </div>
+      {likeness && debug && (
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 6 }}>
+          <figure style={{ margin: 0 }}>
+            <BlobImage
+              blob={likeness.faceTexture}
+              data-testid="face-texture"
+              alt="Face texture"
+              width={256}
+              height={256}
+              style={{ background: '#777', display: 'block' }}
+            />
+            <figcaption style={{ maxWidth: 256 }}>
+              Face texture, {FACE_TEXTURE_SIZE}² in the head's UV square: the face lies on its side
+              there (forehead left, chin right). {likeness.faceTexture.type}, sourceSkin{' '}
+              {likeness.sourceSkin}.
+            </figcaption>
+          </figure>
+          <figure style={{ margin: 0 }}>
+            <FitOverlay aligned={debug.aligned} />
+            <figcaption style={{ maxWidth: 256 }}>
+              Head fit, front view: canonical landmarks grey, the photo's aligned to them red.
+            </figcaption>
+          </figure>
+          <div data-testid="likeness-timings">
+            <div>
+              residual RMS {debug.residualRmsMm.toFixed(1)} mm · max offset{' '}
+              {debug.maxOffsetMm.toFixed(1)} mm
+            </div>
+            <div>
+              fit {debug.ms.fit.toFixed(0)} ms · project {debug.ms.project.toFixed(0)} ms · encode{' '}
+              {debug.ms.encode.toFixed(0)} ms
+            </div>
+            <div>
+              fit + project {(debug.ms.fit + debug.ms.project).toFixed(0)} ms (budget 400 ms)
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** An image of a blob through an object URL, revoked when the blob changes or the image unmounts. */
+function BlobImage({ blob, ...props }: { blob: Blob } & ImgHTMLAttributes<HTMLImageElement>) {
+  const show = useCallback(
+    (img: HTMLImageElement) => {
+      const url = URL.createObjectURL(blob);
+      img.src = url;
+      return () => URL.revokeObjectURL(url);
+    },
+    [blob],
+  );
+  return <img ref={show} {...props} />;
+}
+
+const OVERLAY_SIZE = 256;
+
+/**
+ * A 256² front view (x right, y up, both in cm) of MediaPipe's canonical landmarks in grey and the
+ * photo's landmarks, similarity-aligned to them, in red: what the head fit reads as the face's shape.
+ */
+function FitOverlay({ aligned }: { aligned: Float32Array }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const [canonical, setCanonical] = useState<number[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    // Cached: the analysis loaded it.
+    loadCorrespondence().then(
+      (corr) => live && setCanonical(corr.canonical),
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
+  useEffect(() => {
+    const ctx = ref.current?.getContext('2d');
+    if (!ctx) return; // jsdom in unit tests
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, OVERLAY_SIZE, OVERLAY_SIZE);
+    const sets = canonical ? [canonical, aligned] : [aligned];
+    let [minX, maxX, minY, maxY] = [Infinity, -Infinity, Infinity, -Infinity];
+    for (const points of sets) {
+      for (let i = 0; i + 2 < points.length; i += 3) {
+        minX = Math.min(minX, points[i]!);
+        maxX = Math.max(maxX, points[i]!);
+        minY = Math.min(minY, points[i + 1]!);
+        maxY = Math.max(maxY, points[i + 1]!);
+      }
+    }
+    const margin = 8;
+    const scale = (OVERLAY_SIZE - 2 * margin) / Math.max(maxX - minX, maxY - minY, 1e-6);
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const plot = (points: ArrayLike<number>, color: string) => {
+      ctx.fillStyle = color;
+      for (let i = 0; i + 2 < points.length; i += 3) {
+        const x = OVERLAY_SIZE / 2 + (points[i]! - cx) * scale;
+        const y = OVERLAY_SIZE / 2 - (points[i + 1]! - cy) * scale;
+        ctx.fillRect(x - 1, y - 1, 2, 2);
+      }
+    };
+    if (canonical) plot(canonical, '#9a9a9a');
+    plot(aligned, '#e0245e');
+  }, [aligned, canonical]);
+  return (
+    <canvas
+      ref={ref}
+      data-testid="fit-overlay"
+      width={OVERLAY_SIZE}
+      height={OVERLAY_SIZE}
+      style={{ display: 'block', border: '1px solid #ccc' }}
+    />
   );
 }
 

@@ -465,6 +465,11 @@ test('the texture is 1024² by default, and the same every time', () => {
   expect(again.findIndex((v, i) => v !== PROJECTED.data[i])).toBe(-1); // toEqual is slow on 4 MB
 });
 
+test('a hair mask that is not the photo size is an error', () => {
+  const hair = DEFAULT.hair.subarray(0, DEFAULT.hair.length - DEFAULT.photo.width);
+  expect(() => projectFace({ ...DEFAULT, hair }, CORR, 64)).toThrow(/hair mask/);
+});
+
 const BUILT = 'public/assets/base/correspondence.json';
 
 describe.skipIf(!fs.existsSync(BUILT))('the built correspondence', () => {

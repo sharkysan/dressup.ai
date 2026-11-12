@@ -42,13 +42,20 @@ export type FaceInput = {
  * The photo's face in the head's UV layout (spec §6): a `size`² RGBA image covering `faceUvRect`. Each
  * face-mesh triangle is warped from the photo to its uvs; hair, the eyes and the inner mouth are filled
  * from what surrounds them; the result is de-lit, and alpha is the face oval, feathered inwards.
- * Nothing here assumes the face is upright in texel space (on the base it is turned 90°).
+ * Nothing here assumes the face is upright in texel space (on the base it is turned 90°). Throws if the
+ * hair mask is not the photo's size.
  */
 export function projectFace(
   input: FaceInput,
   corr: Correspondence,
   size: number = FACE_TEXTURE_SIZE,
 ): RgbaImage {
+  const { width, height } = input.photo;
+  if (input.hair.length !== width * height) {
+    throw new Error(
+      `projectFace: a hair mask of ${input.hair.length} for a ${width}×${height} photo`,
+    );
+  }
   const texels = corr.landmarks.map((l) => uvToTexel(l.uv, corr.faceUvRect, size));
   // Not projected from the photo: hair, and the mouth opening.
   const excluded = input.hair.slice();

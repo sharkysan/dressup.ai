@@ -1,54 +1,23 @@
 import { readFileSync } from 'node:fs';
-import { expect, test, type Page } from '@playwright/test';
-import { defaultParams, type AvatarParams } from '../src/catalog/params';
+import { expect, test } from '@playwright/test';
+import { defaultParams } from '../src/catalog/params';
+import {
+  expectGrounded,
+  hairAttached,
+  openAvatar,
+  portrait,
+  setBody,
+  setParams,
+  shot,
+} from './helpers/avatar';
 import { diffPixels, patchMean, readPngSize } from './helpers/png';
 
 const hairIds: string[] = (
   JSON.parse(readFileSync('public/assets/catalog.json', 'utf8')) as { hair: { id: string }[] }
 ).hair.map((h) => h.id);
 
-/** Waits until the named hairstyle's meshes are attached ('none' when bald). */
-async function hairAttached(page: Page, id: string) {
-  await expect
-    .poll(() => page.evaluate(() => window.__kiss!.store.getState().attachedHair), {
-      timeout: 20_000,
-    })
-    .toBe(id);
-}
-
-const portrait = { ...defaultParams.scene, framing: 'portrait' } as const;
-
-async function setBody(page: Page, patch: Partial<AvatarParams['body']>) {
-  await page.evaluate((p) => {
-    const store = window.__kiss!.store;
-    store.getState().setParams({ body: { ...store.getState().params.body, ...p } });
-  }, patch);
-}
-
-async function setParams(page: Page, patch: Partial<AvatarParams>) {
-  await page.evaluate((p) => window.__kiss!.store.getState().setParams(p), patch);
-}
-
-/** Waits for two rendered frames (plus a settle for async loads) so screenshots never catch a half-applied state. */
-async function shot(page: Page, settle = 400) {
-  await page.waitForTimeout(settle);
-  await page.evaluate(
-    () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
-  );
-  return page.getByTestId('viewer').locator('canvas').screenshot();
-}
-
 test.beforeEach(async ({ page }) => {
-  await page.setViewportSize({ width: 600, height: 900 });
-  await page.goto('/#dev');
-  await expect(page.getByTestId('viewer')).toHaveAttribute('data-status', 'ready', {
-    timeout: 45_000,
-  });
-  await expect(page.getByTestId('params-panel')).toBeVisible();
-  // Camera framing depends on avatar metrics measured after load; wait for them so the first shot is final.
-  await page.waitForFunction(() => window.__kiss?.store.getState().avatarMetrics !== null);
-  // The default hair lands after ready; wait so no baseline shot is taken bald.
-  await hairAttached(page, defaultParams.hair);
+  await openAvatar(page);
 });
 
 test('skin tone changes the render', async ({ page }) => {
@@ -198,11 +167,7 @@ test('all body extremes keep the avatar grounded', async ({ page }) => {
     const body = Object.fromEntries(signed.map((m) => [m, value]));
     await setBody(page, { ...body, gender, heightCm: 175 });
     await page.waitForTimeout(400);
-    await expect(page.getByTestId('viewer')).toHaveAttribute('data-status', 'ready');
-    const m = await page.evaluate(() => window.__kiss!.store.getState().avatarMetrics!);
-    expect(Number.isFinite(m.headY) && Number.isFinite(m.height)).toBe(true);
-    expect(m.headY).toBeGreaterThan(1.2);
-    expect(m.headY).toBeLessThan(2.1);
+    await expectGrounded(page);
   }
 });
 

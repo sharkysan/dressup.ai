@@ -355,7 +355,12 @@ export class SkinTexture {
 export async function loadImageData(url: string): Promise<ImageData> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Failed to load ${url}: HTTP ${response.status}`);
-  const bitmap = await createImageBitmap(await response.blob(), {
+  return decodeImageData(await response.blob());
+}
+
+/** Decodes an encoded image (PNG, WebP…) into straight-alpha RGBA pixels, its colours as stored. */
+export async function decodeImageData(blob: Blob): Promise<ImageData> {
+  const bitmap = await createImageBitmap(blob, {
     premultiplyAlpha: 'none',
     colorSpaceConversion: 'none',
   });

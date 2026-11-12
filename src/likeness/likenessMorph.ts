@@ -206,3 +206,19 @@ function equal(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;
 }
+
+/**
+ * Dev/e2e: the names of the meshes under `root` showing the likeness (its target at influence 1), and
+ * whether the brows show (any brows mesh visible).
+ */
+export function likenessStatus(root: Object3D): { meshes: string[]; browsVisible: boolean } {
+  const meshes: string[] = [];
+  let browsVisible = false;
+  root.traverse((node) => {
+    if (!(node instanceof Mesh)) return;
+    const at = node.morphTargetDictionary?.[LIKENESS_TARGET];
+    if (at !== undefined && node.morphTargetInfluences?.[at] === 1) meshes.push(node.name);
+    if (isBrows(node) && node.visible) browsVisible = true;
+  });
+  return { meshes, browsVisible };
+}
