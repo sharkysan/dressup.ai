@@ -12,7 +12,7 @@ import { readAccessor } from '../glb/accessors';
 import type { GlbDoc } from '../glb/types';
 
 export type BaseCheck =
-  'vrm' | 'humanoid' | 'materials' | 'expressions' | 'bodyTargets' | 'headBinding';
+  'vrm' | 'humanoid' | 'materials' | 'expressions' | 'bodyTargets' | 'headBinding' | 'bodyIndexed';
 
 /** The base's meshes that move with the head and carry a head binding (spec §8), named as their materials. */
 export const HEAD_MESHES = [
@@ -145,6 +145,28 @@ export function validateBase(
           problems.push(`body morph target ${t} is missing on ${BODY_MESH}`);
       }
     }
+  }
+
+  if (on('bodyIndexed') && body) {
+    // At load, three-vrm's removeUnnecessaryVertices drops the vertices no index references and renumbers
+    // the rest. The correspondence and the head bindings index the Body's vertices as exported, so a
+    // renumbered Body would no longer fit them, and every photo face would fall back to the default face.
+    body.primitives.forEach((p: any, i: number) => {
+      const where = `mesh ${BODY_MESH} primitive ${i}`;
+      if (p.indices === undefined) {
+        problems.push(`${where} has no indices; the correspondence needs its triangles`);
+        return;
+      }
+      const used = new Uint8Array(json.accessors[p.attributes.POSITION]?.count ?? 0);
+      for (const v of readAccessor(doc, p.indices)) used[v] = 1;
+      const unused = used.reduce((n, u) => n + (u ? 0 : 1), 0);
+      if (unused > 0) {
+        problems.push(
+          `${where}: ${unused} vertices (the first ${used.indexOf(0)}) are in no triangle; ` +
+            `three-vrm would renumber the Body at load`,
+        );
+      }
+    });
   }
 
   if (on('headBinding')) {

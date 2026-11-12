@@ -54,7 +54,19 @@ function validBaseDoc(): GlbDoc {
   };
   const doc: GlbDoc = { json: json as unknown as GlbDoc['json'], bin: new Uint8Array(0) };
   const positions = (count: number) => appendAccessor(doc, new Float32Array(3 * count), 'VEC3');
-  doc.json.meshes[0].primitives.push({ attributes: { POSITION: positions(BODY_VERTICES) } });
+  // Four triangles that between them use every one of the Body's vertices.
+  const indices = appendAccessor(
+    doc,
+    Uint16Array.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1),
+    'SCALAR',
+    {
+      target: 34963,
+    },
+  );
+  doc.json.meshes[0].primitives.push({
+    attributes: { POSITION: positions(BODY_VERTICES) },
+    indices,
+  });
   // Each head mesh: two vertices bound to the Body's last vertices (VEC4 indices, the 4th 0).
   for (const name of HEAD_MESHES) {
     doc.json.meshes.push({
@@ -208,7 +220,39 @@ test('the head binding check can be disabled', () => {
   expect(validateBase(d, { headBinding: false })).toEqual([]);
 });
 
+test('a Body vertex in no triangle is named: three-vrm would renumber the Body at load', () => {
+  const d = validBaseDoc();
+  primitive(d, 'Body').indices = appendAccessor(
+    d,
+    Uint16Array.of(0, 1, 2, 3, 4, 5, 6, 8, 9),
+    'SCALAR',
+  );
+  const problems = validateBase(d);
+  expect(problems).toHaveLength(1);
+  expect(problems[0]).toContain('Body');
+  expect(problems[0]).toContain('1 vertices (the first 7) are in no triangle');
+});
+
+test('a Body without indices is named', () => {
+  const d = validBaseDoc();
+  delete primitive(d, 'Body').indices;
+  const problems = validateBase(d);
+  expect(problems).toHaveLength(1);
+  expect(problems[0]).toContain('Body primitive 0 has no indices');
+});
+
+test('the Body index check can be disabled', () => {
+  const d = validBaseDoc();
+  delete primitive(d, 'Body').indices;
+  expect(validateBase(d, { bodyIndexed: false })).toEqual([]);
+});
+
 describe.skipIf(!fs.existsSync(BUILT))('built base (public/assets/base/base.vrm)', () => {
+  test('passes every check, every Body vertex in a triangle among them', () => {
+    const doc = readGlb(new Uint8Array(fs.readFileSync(BUILT)));
+    expect(validateBase(doc)).toEqual([]);
+  });
+
   test('its five head meshes carry the head binding on every primitive', () => {
     const doc = readGlb(new Uint8Array(fs.readFileSync(BUILT)));
     const format = (accessor: number) => {
