@@ -114,7 +114,7 @@ function prepare(vrm: VRM, meta: BaseMeta, baseLayer: ImageData, params: AvatarP
   }
   // The exported roughness, read before applyParams hands it to the roughness map.
   const skin = new SkinTexture(image, baseLayer, material.roughness);
-  const ctx = { skin, eyes: new EyeTextures(), meta };
+  const ctx: ApplyContext = { skin, eyes: new EyeTextures(), meta, face: null };
   applyParams(vrm, params, ctx);
   original.dispose();
   if ('close' in image) image.close();
