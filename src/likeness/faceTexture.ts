@@ -8,11 +8,13 @@ export const FACE_TEXTURE_SIZE = 1024;
 /**
  * The face texture's masks and constants. The eye polygons (the eyelid margins), dilated by
  * `eyeDilatePx`, and the inner-mouth polygon (the inner lip line), dilated by `mouthDilatePx`, are not
- * projected; the 3D eyes and lashes replace the eyes, and the lips close over the mouth. Dilating the
- * mouth drops the lip texels at its edge, whose bilinear samples pick up the teeth of an open mouth, so
- * the teeth don't tint its fill. Alpha rises from 0 at the face oval to 255 `featherPx` inside it.
- * De-lighting divides by a Gaussian blur of the luminance with σ = `delightSigmaPx`, its gain clamped
- * to `gainRange`.
+ * projected; the 3D eyes and lashes replace the eyes, and the lips close over the mouth. The inner mouth
+ * is also masked in the photo, like hair: a texel is not projected if any of its four bilinear taps lies
+ * inside the photo's inner-mouth polygon. That drops every lip texel whose sample reads the teeth of an
+ * open mouth, which no dilation in texels can: the UV layout stretches the lips several times, and the
+ * upper lip can fold over the mouth opening in the photo. Alpha rises from 0 at the face oval to 255
+ * `featherPx` inside it. De-lighting divides by a Gaussian blur of the luminance with
+ * σ = `delightSigmaPx`, its gain clamped to `gainRange`.
  */
 export const FACE_MASKS = {
   eyeR: [33, 246, 161, 160, 159, 158, 157, 173, 133, 155, 154, 153, 145, 144, 163, 7],
@@ -48,9 +50,13 @@ export function projectFace(
   size: number = FACE_TEXTURE_SIZE,
 ): RgbaImage {
   const texels = corr.landmarks.map((l) => uvToTexel(l.uv, corr.faceUvRect, size));
+  // Not projected from the photo: hair, and the mouth opening.
+  const excluded = input.hair.slice();
+  const opening = FACE_MASKS.innerMouth.map((i) => input.landmarks[i]!);
+  markPolygon(excluded, input.photo.width, input.photo.height, opening);
   const { image, valid } = warpTriangles(
     input.photo,
-    input.hair,
+    excluded,
     input.landmarks,
     texels,
     corr.triangles,
@@ -101,13 +107,14 @@ export function uvToTexel(
  * Warps the photo into a `size`² texture, triangle by triangle: each texel centre inside a destination
  * triangle (`to`, texels) maps through its barycentrics to the photo (`from`, pixels), which is sampled
  * bilinearly. Warped texels get alpha 255, the rest stay 0. `valid` is 1 at warped texels whose source
- * lies inside the photo and isn't hair: none of the four pixels the bilinear sample reads is set in
- * `hair` (each read as is, the mask isn't interpolated). Testing only the nearest pixel would keep a
- * fringe of half-hair texels along every hair edge, which the fill then smears into the hole.
+ * lies inside the photo and isn't excluded (hair, the mouth opening): none of the four pixels the
+ * bilinear sample reads is set in `excluded` (each read as is, the mask isn't interpolated). Testing
+ * only the nearest pixel would keep a fringe of half-hair texels along every hair edge, which the fill
+ * then smears into the hole.
  */
 export function warpTriangles(
   photo: RgbaImage,
-  hair: Uint8Array,
+  excluded: Uint8Array,
   from: readonly Point2[],
   to: readonly Point2[],
   triangles: readonly (readonly [number, number, number])[],
@@ -142,9 +149,9 @@ export function warpTriangles(
         const sx = w0 * p.x + w1 * q.x + w2 * r.x;
         const sy = w0 * p.y + w1 * q.y + w2 * r.y;
         const t = y * size + x;
-        const hairy = sample(src, hair, W, H, sx, sy, out, 4 * t);
+        const skip = sample(src, excluded, W, H, sx, sy, out, 4 * t);
         out[4 * t + 3] = 255;
-        valid[t] = !hairy && sx >= 0 && sy >= 0 && sx < W && sy < H ? 1 : 0;
+        valid[t] = !skip && sx >= 0 && sy >= 0 && sx < W && sy < H ? 1 : 0;
       }
     }
   }
@@ -153,11 +160,11 @@ export function warpTriangles(
 
 /**
  * Writes the bilinear RGB at (x, y), in pixels with pixel centres at +½ and clamped at the edges, to
- * `out` at `o`. Returns whether any of the four pixels it reads is hair.
+ * `out` at `o`. Returns whether any of the four pixels it reads is set in `excluded`.
  */
 function sample(
   src: Uint8ClampedArray,
-  hair: Uint8Array,
+  excluded: Uint8Array,
   W: number,
   H: number,
   x: number,
@@ -182,7 +189,12 @@ function sample(
     const bottom = src[k01 + ch]! + (src[k11 + ch]! - src[k01 + ch]!) * tx;
     out[o + ch] = top + (bottom - top) * ty;
   }
-  return !!(hair[ya * W + xa] || hair[ya * W + xb] || hair[yb * W + xa] || hair[yb * W + xb]);
+  return !!(
+    excluded[ya * W + xa] ||
+    excluded[ya * W + xb] ||
+    excluded[yb * W + xa] ||
+    excluded[yb * W + xb]
+  );
 }
 
 /**
@@ -444,6 +456,24 @@ export function featherAlpha(oval: Point2[], size: number, featherPx: number): U
 /** Every corner of `poly`, in order, as polygonMask's indices. */
 function corners(poly: Point2[]): number[] {
   return poly.map((_, i) => i);
+}
+
+/**
+ * Sets `mask` (width × height) to 1 where polygonMask of `poly` is set. Only the polygon's bounding
+ * box is rasterised and visited, not the whole photo.
+ */
+function markPolygon(mask: Uint8Array, width: number, height: number, poly: Point2[]): void {
+  const xs = poly.map((p) => p.x);
+  const ys = poly.map((p) => p.y);
+  const x0 = Math.max(0, Math.floor(Math.min(...xs)));
+  const y0 = Math.max(0, Math.floor(Math.min(...ys)));
+  const w = Math.max(0, Math.min(width, Math.ceil(Math.max(...xs)) + 1) - x0);
+  const h = Math.max(0, Math.min(height, Math.ceil(Math.max(...ys)) + 1) - y0);
+  const shifted = poly.map((p) => ({ x: p.x - x0, y: p.y - y0 }));
+  const inside = polygonMask(shifted, corners(shifted), w, h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) if (inside[y * w + x]) mask[(y0 + y) * width + x0 + x] = 1;
+  }
 }
 
 /** A window of a `size`² texture: texels x0 ≤ x < x0 + w, y0 ≤ y < y0 + h, with a value per texel. */

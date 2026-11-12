@@ -304,8 +304,8 @@ test('the eyes and the inner mouth are filled from around them', () => {
   }
   // In the UV layout the inner mouth is a sliver between the lips (3 texels high at 1024²), so what
   // surrounds it, and fills it, is lip, not skin: the teeth go and the lips close over them. The lip
-  // texels at its edge pick up teeth in the warp's bilinear samples; without mouthDilatePx they tint
-  // the fill (ΔE ~0.10 from the lip at the centre).
+  // texels at its edge pick up teeth in the warp's bilinear samples; left valid, they would tint the
+  // fill (ΔE ~0.10 from the lip at the centre). The next test checks those lip texels themselves.
   const centre = centroid(FACE_MASKS.innerMouth.map((i) => TEXELS[i]!));
   expect(deltaE(texel(warped.image, centre), TEETH)).toBeLessThan(0.05); // what the mask removes
   const upperLip = texel(PROJECTED, midpoint(TEXELS[LM.lipTop]!, TEXELS[13]!));
@@ -316,6 +316,57 @@ test('the eyes and the inner mouth are filled from around them', () => {
   expect(deltaE(at, TEETH)).toBeGreaterThan(0.2);
   expect(deltaE(at, COLORS.skin)).toBeGreaterThan(0.05);
   expect(deltaE(at, COLORS.iris)).toBeGreaterThan(0.05);
+});
+
+test('the lips around an open mouth carry no teeth', () => {
+  // The lip texels just outside the inner-mouth polygon (the rim, within 2 texels) come out lip, not
+  // teeth. Checked over every lip texel outside the polygon and within 16 texels of it, which takes in
+  // both ways the teeth reach the lips. In the UV layout a lip strip 1–3 px tall in the photo spans
+  // 7–10 texels, so the rim's bilinear samples read the teeth. And near the mouth corners the canonical
+  // face's upper lip folds over the mouth opening in the photo, so the warp puts teeth on lip texels up
+  // to ~12 texels out, beyond the reach of a dilation in texels.
+  const warped = warpTriangles(
+    DEFAULT.photo,
+    DEFAULT.hair,
+    DEFAULT.landmarks,
+    TEXELS,
+    CORR.triangles,
+    SIZE,
+  ).image;
+  const lip = texel(PROJECTED, midpoint(TEXELS[LM.lipTop]!, TEXELS[13]!));
+  const mouth = FACE_MASKS.innerMouth.map((i) => TEXELS[i]!);
+  const inMouth = polygonMask(TEXELS, FACE_MASKS.innerMouth, SIZE, SIZE);
+  const inLips = polygonMask(TEXELS, LM.outerLips, SIZE, SIZE);
+  const [reach, rimWidth] = [16, 2];
+  const [xs, ys] = [mouth.map((p) => p.x), mouth.map((p) => p.y)];
+  const [x0, x1] = [Math.floor(Math.min(...xs)) - reach, Math.ceil(Math.max(...xs)) + reach];
+  const [y0, y1] = [Math.floor(Math.min(...ys)) - reach, Math.ceil(Math.max(...ys)) + reach];
+  let near = 0; // lip texels outside the polygon and within reach of it
+  let rim = 0; // of those, the ones within rimWidth of the polygon
+  let teeth = 0; // of those, the ones the warp tints towards the teeth: what has to go
+  let beyond = 0; // of those, the ones past the rim
+  let worst = 0;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const p = { x: x + 0.5, y: y + 0.5 };
+      if (!inLips[y * SIZE + x] || inMouth[y * SIZE + x]) continue;
+      const d = distanceToPolygon(p, mouth);
+      if (d > reach) continue;
+      near++;
+      if (d <= rimWidth) rim++;
+      const w = texel(warped, p);
+      if (deltaE(w, COLORS.lips) > 0.05 && deltaE(w, TEETH) < deltaE(rgb8(COLORS.lips), TEETH)) {
+        teeth++;
+        if (d > rimWidth) beyond++;
+      }
+      worst = Math.max(worst, deltaE(texel(PROJECTED, p), lip));
+    }
+  }
+  expect(near).toBeGreaterThan(6000);
+  expect(rim).toBeGreaterThan(700);
+  expect(teeth).toBeGreaterThan(1500);
+  expect(beyond).toBeGreaterThan(1000);
+  expect(worst).toBeLessThan(0.05);
 });
 
 test('hair over the forehead is replaced by skin', () => {

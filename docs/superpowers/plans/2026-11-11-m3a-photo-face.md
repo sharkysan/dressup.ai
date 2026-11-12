@@ -290,7 +290,7 @@
 - [ ] **Step 2: Run them and see them fail.** `npx vitest run tests/likeness/faceTexture.test.ts`. Expected: FAIL.
 
 - [ ] **Step 3: Implement `projectFace`.**
-  1. **Warp.** Rasterise each triangle at texel centres in destination (texel) space. Map through barycentrics to the photo, and sample bilinearly; alpha 255. A texel is invalid if any of the four bilinear taps is hair (in `hair`).
+  1. **Warp.** Rasterise each triangle at texel centres in destination (texel) space. Map through barycentrics to the photo, and sample bilinearly; alpha 255. A texel is invalid if any of the four bilinear taps is hair (in `hair`) or lies inside the photo's inner-mouth polygon (`FACE_MASKS.innerMouth` over the photo landmarks): the UV layout stretches the lips several times, and the upper lip can fold over the mouth opening, so only a photo-space mask removes every lip texel that reads the teeth of an open mouth.
   2. **Invalid regions.** Add the eye polygons dilated by `eyeDilatePx` (the 3D lashes and eyes replace them), and the inner-mouth polygon dilated by `mouthDilatePx` (the lips close over it).
   3. **Fill.** `fillHoles` fills every invalid texel and every texel outside the warped area from the valid ones by pull-push.
   4. **De-light.**
