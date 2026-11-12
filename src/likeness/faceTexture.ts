@@ -7,9 +7,12 @@ export const FACE_TEXTURE_SIZE = 1024;
 
 /**
  * The face texture's masks and constants. The eye polygons (the eyelid margins), dilated by
- * `eyeDilatePx`, and the inner-mouth polygon (the inner lip line) are not projected; the 3D eyes and
- * lashes replace the eyes. Alpha rises from 0 at the face oval to 255 `featherPx` inside it. De-lighting
- * divides by a Gaussian blur of the luminance with σ = `delightSigmaPx`, its gain clamped to `gainRange`.
+ * `eyeDilatePx`, and the inner-mouth polygon (the inner lip line), dilated by `mouthDilatePx`, are not
+ * projected; the 3D eyes and lashes replace the eyes, and the lips close over the mouth. Dilating the
+ * mouth drops the lip texels at its edge, whose bilinear samples pick up the teeth of an open mouth, so
+ * the teeth don't tint its fill. Alpha rises from 0 at the face oval to 255 `featherPx` inside it.
+ * De-lighting divides by a Gaussian blur of the luminance with σ = `delightSigmaPx`, its gain clamped
+ * to `gainRange`.
  */
 export const FACE_MASKS = {
   eyeR: [33, 246, 161, 160, 159, 158, 157, 173, 133, 155, 154, 153, 145, 144, 163, 7],
@@ -18,6 +21,7 @@ export const FACE_MASKS = {
     78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95,
   ],
   eyeDilatePx: 6,
+  mouthDilatePx: 2,
   featherPx: 40,
   delightSigmaPx: 64,
   gainRange: [0.5, 2],
@@ -54,9 +58,14 @@ export function projectFace(
   );
 
   const at = (indices: readonly number[]) => indices.map((i) => texels[i]!);
-  for (const eye of [FACE_MASKS.eyeR, FACE_MASKS.eyeL]) {
-    const poly = at(eye);
-    const r = FACE_MASKS.eyeDilatePx;
+  const masked = [
+    [FACE_MASKS.eyeR, FACE_MASKS.eyeDilatePx],
+    [FACE_MASKS.eyeL, FACE_MASKS.eyeDilatePx],
+    [FACE_MASKS.innerMouth, FACE_MASKS.mouthDilatePx],
+  ] as const;
+  for (const [indices, r] of masked) {
+    // The polygon, dilated by r: inside it, or within r of its edges.
+    const poly = at(indices);
     const inside = polygonMask(poly, corners(poly), size, size);
     const { x0, y0, w, h, values } = edgeDistance2(poly, size, r + 1);
     for (let y = y0; y < y0 + h; y++) {
@@ -66,8 +75,6 @@ export function projectFace(
       }
     }
   }
-  const mouth = polygonMask(texels, FACE_MASKS.innerMouth, size, size);
-  for (let i = 0; i < valid.length; i++) if (mouth[i]) valid[i] = 0;
 
   fillHoles(image, valid);
   // The face mesh's outline is the face oval, so the valid texels are the valid texels inside it.

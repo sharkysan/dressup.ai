@@ -265,7 +265,7 @@
     - `eyeR: [33, 246, 161, 160, 159, 158, 157, 173, 133, 155, 154, 153, 145, 144, 163, 7]`
     - `eyeL: [263, 466, 388, 387, 386, 385, 384, 398, 362, 382, 381, 380, 374, 373, 390, 249]`
     - `innerMouth: [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95]`
-    - `eyeDilatePx: 6`, `featherPx: 40`, `delightSigmaPx: 64`, `gainRange: [0.5, 2]`
+    - `eyeDilatePx: 6`, `mouthDilatePx: 2`, `featherPx: 40`, `delightSigmaPx: 64`, `gainRange: [0.5, 2]`
   - `projectFace(input: { photo: RgbaImage; landmarks: Point2[] /* 478, photo px */; hair: Uint8Array /* photo-sized, 1 = hair */ }, corr: Correspondence, size?: number): RgbaImage`.
   - Steps exported for tests:
     - `uvToTexel(uv: [number, number], rect: Correspondence['faceUvRect'], size: number): Point2`
@@ -290,8 +290,8 @@
 - [ ] **Step 2: Run them and see them fail.** `npx vitest run tests/likeness/faceTexture.test.ts`. Expected: FAIL.
 
 - [ ] **Step 3: Implement `projectFace`.**
-  1. **Warp.** Rasterise each triangle at texel centres in destination (texel) space. Map through barycentrics to the photo, and sample bilinearly; alpha 255. A texel whose source pixel is hair (nearest sample of `hair`) is invalid.
-  2. **Invalid regions.** Add the eye polygons dilated by `eyeDilatePx` (the 3D lashes and eyes replace them), and the inner-mouth polygon.
+  1. **Warp.** Rasterise each triangle at texel centres in destination (texel) space. Map through barycentrics to the photo, and sample bilinearly; alpha 255. A texel is invalid if any of the four bilinear taps is hair (in `hair`).
+  2. **Invalid regions.** Add the eye polygons dilated by `eyeDilatePx` (the 3D lashes and eyes replace them), and the inner-mouth polygon dilated by `mouthDilatePx` (the lips close over it).
   3. **Fill.** `fillHoles` fills every invalid texel and every texel outside the warped area from the valid ones by pull-push.
   4. **De-light.**
      - Y is linear-light luminance.
