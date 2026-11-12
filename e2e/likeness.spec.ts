@@ -17,7 +17,10 @@ import { diffPixels } from './helpers/png';
 /** A synthetic likeness: a face texture of one colour (null: transparent) and head offsets. */
 type Synthetic = {
   color: string | null;
-  /** Metres along +x (the subject's left) on the subject-left half of the head; 0 leaves it still. */
+  /**
+   * Metres along +x (the subject's left) on the subject-left half of the head, times each vertex's head
+   * weight as fitHead scales its offsets, so that it fades down the neck; 0 leaves the head still.
+   */
   leftHalfX: number;
 };
 
@@ -29,10 +32,12 @@ type Synthetic = {
 async function setLikeness(page: Page, likeness: Synthetic) {
   await page.evaluate(async ({ color, leftHalfX }) => {
     const response = await fetch('/assets/base/correspondence.json');
-    const { head } = (await response.json()) as { head: { positions: number[] } };
+    const { head } = (await response.json()) as {
+      head: { positions: number[]; weights: number[] };
+    };
     const headOffsets = new Float32Array(head.positions.length);
     for (let i = 0; i < headOffsets.length; i += 3) {
-      if (head.positions[i]! > 0) headOffsets[i] = leftHalfX;
+      if (head.positions[i]! > 0) headOffsets[i] = leftHalfX * head.weights[i / 3]!;
     }
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 1024;
