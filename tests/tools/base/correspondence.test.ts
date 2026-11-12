@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { LM } from '../../../src/analysis/landmarks';
 import { BODY_MESH } from '../../../src/avatar/baseContract';
 import { correspondenceSchema, type Correspondence } from '../../../src/likeness/correspondence';
+import { FACE_TEXTURE_SIZE as FACE_TEXTURE_TEXELS } from '../../../src/likeness/faceTexture';
 import { applySimilarity } from '../../../src/likeness/similarity';
 import { CANONICAL_FACE_OBJ, readCanonicalFace } from '../../../tools/base/canonicalFace';
 import { buildCorrespondence, headWeights } from '../../../tools/base/correspondence';
@@ -77,6 +78,43 @@ function insidePolygon([x, y]: [number, number], polygon: [number, number][]): b
 
 const distance = (a: Vec3, b: Vec3) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
+function area([a, b, c]: [Vec3, Vec3, Vec3]): number {
+  const u: Vec3 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+  const v: Vec3 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+  return (
+    Math.hypot(u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]) / 2
+  );
+}
+
+/**
+ * MediaPipe's lips, written out here rather than taken from the build: the outer and inner lip contours
+ * and the two rings between them. The mouth corners are on both lips.
+ */
+const LIPS = {
+  upper: [
+    61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, 76, 184, 74, 73, 72, 11, 302, 303, 304, 408,
+    306, 62, 183, 42, 41, 38, 12, 268, 271, 272, 407, 292, 78, 191, 80, 81, 82, 13, 312, 311, 310,
+    415, 308,
+  ],
+  lower: [
+    61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 76, 77, 90, 180, 85, 16, 315, 404, 320, 307,
+    306, 62, 96, 89, 179, 86, 15, 316, 403, 319, 325, 292, 78, 95, 88, 178, 87, 14, 317, 402, 318,
+    324, 308,
+  ],
+};
+
+/**
+ * The base of the nose, found from the canonical face rather than taken from the build: the landmarks
+ * within the alar width (|x| ≤ 1.8 cm) from the subnasale (2) up to the nose tip (4), nostrils included.
+ */
+function noseBase(): number[] {
+  const { positions } = readCanonicalFace(CANONICAL_FACE_OBJ);
+  const [bottom, top] = [positions[2]![1], positions[4]![1]];
+  return positions
+    .slice(0, 468)
+    .flatMap(([x, y], i) => (Math.abs(x) <= 1.8 && y >= bottom && y <= top ? [i] : []));
+}
+
 describe.skipIf(!fs.existsSync(BUILT))('correspondence of the built base', () => {
   let doc: GlbDoc;
   let data: Correspondence;
@@ -122,6 +160,63 @@ describe.skipIf(!fs.existsSync(BUILT))('correspondence of the built base', () =>
     expect(x(362)).toBeGreaterThan(0);
     expect(x(263)).toBeGreaterThan(x(362));
     expect(Math.abs(x(4))).toBeLessThan(0.002);
+  });
+
+  test('the lips are registered, not collapsed: y(0) > y(13) ≥ y(14) > y(17), each lip ≥ 2 mm', () => {
+    const y = (i: number) => position(i)[1];
+    // The base's lips are closed, so the inner contours (13 above 14) meet at its mouth slit.
+    expect(y(0)).toBeGreaterThan(y(13));
+    expect(y(13)).toBeGreaterThanOrEqual(y(14));
+    expect(y(14)).toBeGreaterThan(y(17));
+    expect(y(0) - y(13)).toBeGreaterThanOrEqual(0.002);
+    expect(y(14) - y(17)).toBeGreaterThanOrEqual(0.002);
+    // Down the midline, outer to inner contour and inner to outer, the lips keep their order.
+    const midline = [0, 11, 12, 13, 14, 15, 16, 17].map(y);
+    for (let k = 1; k < midline.length; k++) expect(midline[k]).toBeLessThan(midline[k - 1]!);
+  });
+
+  test('no face-mesh triangle over the lips or the base of the nose is folded or flat in uv', () => {
+    const uv = (i: number) => data.landmarks[i]!.uv;
+    const signed = ([a, b, c]: [number, number, number]) => {
+      const [p, q, r] = [uv(a), uv(b), uv(c)];
+      return (q[0] - p[0]) * (r[1] - p[1]) - (r[0] - p[0]) * (q[1] - p[1]);
+    };
+    const signs = data.triangles.map((t) => Math.sign(signed(t)));
+    const majority = signs.filter((s) => s > 0).length > signs.length / 2 ? 1 : -1;
+    const watched = new Set([...LIPS.upper, ...LIPS.lower, ...noseBase()]);
+    const over = data.triangles.filter((t) => t.some((i) => watched.has(i)));
+    const bad = over.filter((t) => Math.sign(signed(t)) !== majority);
+    expect(over.length).toBeGreaterThan(250);
+    expect(bad, `${bad.length} of ${over.length}`).toEqual([]);
+  });
+
+  test("the lips get their share of the face texture's texels", () => {
+    // Texels (of the 1024² face texture) per cm² of the surface the triangles cover: on the base (the
+    // landmarks' positions), and on the aligned canonical face (the photo's face, so that a lip squeezed
+    // into a crease shows). The upper lip had 0.46× and 0.10× before the view projection.
+    const k = FACE_TEXTURE_TEXELS / data.faceUvRect.size;
+    const aligned = (i: number) =>
+      applySimilarity(data.canonicalToBase, data.canonical.slice(3 * i, 3 * i + 3) as Vec3);
+    const uvArea = (t: [number, number, number]) => {
+      const [a, b, c] = t.map((i) => data.landmarks[i]!.uv) as [number, number][];
+      return Math.abs((b![0] - a![0]) * (c![1] - a![1]) - (c![0] - a![0]) * (b![1] - a![1])) / 2;
+    };
+    const density = (keep: (t: [number, number, number]) => boolean) => {
+      let [texels, base, canonical] = [0, 0, 0];
+      for (const t of data.triangles.filter(keep)) {
+        texels += k * k * uvArea(t);
+        base += 1e4 * area(t.map(position) as [Vec3, Vec3, Vec3]);
+        canonical += 1e4 * area(t.map(aligned) as [Vec3, Vec3, Vec3]);
+      }
+      return { base: texels / base, canonical: texels / canonical };
+    };
+    const face = density(() => true);
+    for (const lip of [LIPS.upper, LIPS.lower]) {
+      const on = new Set(lip);
+      const d = density((t) => t.every((i) => on.has(i)));
+      expect(d.base / face.base).toBeGreaterThanOrEqual(0.6);
+      expect(d.canonical / face.canonical).toBeGreaterThanOrEqual(0.6);
+    }
   });
 
   test('the aligned canonical face lies on the head: mean distance < 8 mm, max < 20 mm', () => {
