@@ -18,5 +18,6 @@ export const strings = {
     useDefault: 'Start from a default avatar',
     likenessOk: 'Face large enough for a photo face',
     likenessTooSmall: 'Face too small for a photo face — using the default face',
+    likenessFailed: "Couldn't build a photo face — using the default face",
   },
 } as const;

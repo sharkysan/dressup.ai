@@ -204,6 +204,13 @@ function Attributes({ result }: { result: AnalyzeResult }) {
   );
 }
 
+/** The projection gate's line, one per outcome (a Record, so a new outcome needs its line). */
+const GATE_LINES: Record<AnalyzeResult['likenessGate'], string> = {
+  ok: strings.analysis.likenessOk,
+  too_small: strings.analysis.likenessTooSmall,
+  failed: strings.analysis.likenessFailed,
+};
+
 /**
  * The likeness: the projection gate, and with a likeness its face texture, the head fit (residuals and
  * a front view of the aligned landmarks over the canonical ones) and the step timings, against the
@@ -214,9 +221,7 @@ function LikenessPanel({ result }: { result: AnalyzeResult }) {
   return (
     <div style={{ marginTop: 10 }}>
       <b>Photo face</b>
-      <div data-testid="likeness-gate">
-        {likenessGate === 'ok' ? strings.analysis.likenessOk : strings.analysis.likenessTooSmall}
-      </div>
+      <div data-testid="likeness-gate">{GATE_LINES[likenessGate]}</div>
       {likeness && debug && (
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 6 }}>
           <figure style={{ margin: 0 }}>

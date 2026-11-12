@@ -68,10 +68,14 @@ export type AnalyzeResult = {
   mask: CategoryMask;
   preview: HTMLCanvasElement;
   faceBox: Box;
-  /** The photo face; null below the projection gate, where `params.face` is 'default'. */
+  /** The photo face when likenessGate is 'ok'; otherwise null, and `params.face` is 'default'. */
   likeness: Likeness | null;
-  /** The projection gate (GATES.minProjectionFaceWidthPx). */
-  likenessGate: 'ok' | 'too_small';
+  /**
+   * 'ok': the photo face was built. 'too_small': the face is below the projection gate
+   * (GATES.minProjectionFaceWidthPx). 'failed': the face passed every gate, but building the photo face
+   * failed (a head fit that is not finite, no 2-D canvas, no encoder).
+   */
+  likenessGate: 'ok' | 'too_small' | 'failed';
   likenessDebug: LikenessDebug | null;
 };
 
@@ -107,8 +111,9 @@ export function applyGates(face: FaceObservation): void {
 /**
  * Photo → AvatarParams and the Likeness, entirely on the device: load models and correspondence →
  * decode → detect → largest face → gates → segment → map → (projection gate) → crop → likeness. Every
- * expected failure is an AnalysisError with a user-facing message (messageFor); a head fit that is not
- * finite rejects with buildLikeness's Error. The full-resolution bitmap is closed whatever happens.
+ * expected failure is an AnalysisError with a user-facing message (messageFor). A failure while building
+ * the likeness does not reject: the params come back with the default face, `likeness: null` and
+ * `likenessGate: 'failed'`. The full-resolution bitmap is closed whatever happens.
  */
 export async function analyzePhoto(
   file: Blob,
@@ -161,8 +166,21 @@ export async function analyzePhoto(
         likenessDebug: null,
       };
     }
-    const crop = faceCrop(decoded.bitmap, decoded.image, face, box, mask);
-    const built = await buildLikeness({ face, crop, sourceSkin: params.skin }, corr);
+    let built: Awaited<ReturnType<typeof buildLikeness>>;
+    try {
+      const crop = faceCrop(decoded.bitmap, decoded.image, face, box, mask);
+      built = await buildLikeness({ face, crop, sourceSkin: params.skin }, corr);
+    } catch {
+      // Spec §3: the photo, the crop and the offsets stay out of logs, so the error is not printed.
+      console.warn("analyzePhoto: couldn't build the photo face; using the default face");
+      return {
+        ...result,
+        params: { ...params, face: 'default' },
+        likeness: null,
+        likenessGate: 'failed',
+        likenessDebug: null,
+      };
+    }
     return {
       ...result,
       params: { ...params, face: 'photo' },

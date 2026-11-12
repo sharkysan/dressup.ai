@@ -231,16 +231,44 @@ test.each([
   expect(bitmap.close).toHaveBeenCalledTimes(1);
 });
 
-test('the full-resolution bitmap is closed when the likeness fails', async () => {
-  const bitmap = decodedAt(300 / ANALYSED_WIDTH);
-  vi.mocked(buildLikeness).mockRejectedValue(
-    new Error('buildLikeness: the head fit is not finite'),
-  );
-  await expect(analyzePhoto(blob, { catalog: null, adapter: adapter() })).rejects.toThrow(
-    /not finite/,
-  );
-  expect(bitmap.close).toHaveBeenCalledTimes(1);
-});
+test.each([
+  [
+    'a head fit that is not finite',
+    () =>
+      vi
+        .mocked(buildLikeness)
+        .mockRejectedValue(new Error('buildLikeness: the head fit is not finite')),
+  ],
+  [
+    'a crop with no 2-D context',
+    () =>
+      vi.mocked(cropFace).mockImplementation(() => {
+        throw new Error('cropFace: no 2D context');
+      }),
+  ],
+] as const)(
+  'a likeness that fails to build (%s) → likenessGate failed, the default face, no likeness',
+  async (_, fail) => {
+    const bitmap = decodedAt(300 / ANALYSED_WIDTH);
+    fail();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const result = await analyzePhoto(blob, { catalog: null, adapter: adapter() });
+      expect(result.likenessGate).toBe('failed');
+      expect(result.likeness).toBeNull();
+      expect(result.likenessDebug).toBeNull();
+      expect(result.params.face).toBe('default');
+      expect(avatarParamsSchema.safeParse(result.params).success).toBe(true);
+      expect(bitmap.close).toHaveBeenCalledTimes(1);
+      // One fixed line, which carries nothing from the photo or the error.
+      expect(warn.mock.calls).toEqual([
+        ["analyzePhoto: couldn't build the photo face; using the default face"],
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
+  },
+);
 
 test('model load failure → models', async () => {
   const a = adapter(fx.faces, { loadModels: vi.fn().mockRejectedValue(new Error('offline')) });

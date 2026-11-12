@@ -156,6 +156,23 @@ test('a face too small for a photo face says so, and shows no face texture', asy
   expect(useAppStore.getState().likeness).toBeNull();
 });
 
+test('a photo face that failed to build says so; the params still apply, with the default face', async () => {
+  vi.mocked(analyzePhoto).mockResolvedValue({ ...base, likenessGate: 'failed' });
+  render(<AnalysisPage />);
+  await act(async () => upload());
+  await screen.findByText('Apply to avatar');
+  expect(strings.analysis.likenessFailed).toBe(
+    "Couldn't build a photo face — using the default face",
+  );
+  expect(screen.getByTestId('likeness-gate')).toHaveTextContent(strings.analysis.likenessFailed);
+  expect(screen.queryByTestId('face-texture')).toBeNull();
+  expect(screen.queryByTestId('fit-overlay')).toBeNull();
+  expect(screen.getByTestId('analysis-status')).toHaveAttribute('data-analysis', 'done');
+  expect(useAppStore.getState().likeness).toBeNull();
+  expect(useAppStore.getState().params).toEqual(base.params);
+  expect(base.params.face).toBe('default');
+});
+
 test('Apply to avatar also sets the likeness', async () => {
   const l = likeness(1);
   vi.mocked(analyzePhoto).mockResolvedValue(withLikeness(l));
