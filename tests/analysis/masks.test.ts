@@ -3,8 +3,10 @@ import {
   categoryEquals,
   countOnes,
   coverage,
+  dilateMask,
   expandBox,
   lowestRow,
+  maskForCrop,
   resampleMask,
   restrictToBox,
 } from '../../src/analysis/masks';
@@ -48,4 +50,54 @@ test('expandBox grows about the centre and clamps to the image', () => {
   const c = expandBox({ x: 0, y: 0, width: 20, height: 20 }, 3, 100, 100);
   expect(c.x).toBe(0);
   expect(c.y).toBe(0);
+});
+
+test('maskForCrop maps a hair quadrant to the matching quadrant of the crop', () => {
+  // A 4×4 mask over a 400×400 photo, hair (1) in its top-right quadrant, the rest face skin (3).
+  const data = new Uint8Array(16).fill(3);
+  for (const i of [2, 3, 6, 7]) data[i] = 1;
+  const mask = { width: 4, height: 4, data };
+  // The crop is the photo's centre 200×200 at half scale: the mask's middle 2×2 cells, one hair.
+  const crop = { width: 100, height: 100 };
+  const rect = { x: 100, y: 100, width: 200, height: 200 };
+  const out = maskForCrop(mask, 1, rect, 0.5, { width: 400, height: 400 }, crop);
+  expect(out).toHaveLength(crop.width * crop.height);
+  for (let y = 0; y < crop.height; y++) {
+    for (let x = 0; x < crop.width; x++) {
+      expect(out[y * crop.width + x], `(${x}, ${y})`).toBe(x >= 50 && y < 50 ? 1 : 0);
+    }
+  }
+});
+
+test('maskForCrop samples nearest and clamps at the photo edge', () => {
+  // One column of hair at the mask's right edge; the crop reaches it only in its last column.
+  const mask = { width: 4, height: 1, data: new Uint8Array([0, 0, 0, 1]) };
+  const out = maskForCrop(
+    mask,
+    1,
+    { x: 280, y: 0, width: 120, height: 10 },
+    1,
+    { width: 400, height: 10 },
+    { width: 120, height: 10 },
+  );
+  // Crop columns 0..19 are photo x 280..299 (mask cell 2), 20..119 are 300..399 (cell 3).
+  expect(Array.from(out.subarray(0, 120)).indexOf(1)).toBe(20);
+  expect(out.subarray(0, 120).every((v, x) => v === (x >= 20 ? 1 : 0))).toBe(true);
+});
+
+test('dilateMask grows each set pixel into a square of side 2r + 1, clipped to the image', () => {
+  const width = 9;
+  const height = 7;
+  const mask = new Uint8Array(width * height);
+  mask[3 * width + 4] = 1; // (4, 3)
+  mask[0] = 1; // (0, 0)
+  const out = dilateMask(mask, width, height, 2);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const near = (Math.abs(x - 4) <= 2 && Math.abs(y - 3) <= 2) || (x <= 2 && y <= 2);
+      expect(out[y * width + x], `(${x}, ${y})`).toBe(near ? 1 : 0);
+    }
+  }
+  expect(mask[1]).toBe(0); // the input is left alone
+  expect(dilateMask(mask, width, height, 0)).toEqual(mask);
 });

@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { ALL_BODY_TARGETS } from '../../src/avatar/baseContract';
 import type { GlbDoc } from '../glb/types';
+import { headBindingProblems } from './validateBase';
 
 /** The mesh and the material of a built hairstyle (build_base.py export_hair). */
 export const HAIR = 'Hair';
@@ -40,10 +41,14 @@ function imageSize(bytes: Uint8Array): [number, number] | null {
 
 /**
  * Validates a built hairstyle: one mesh, Hair, skinned to bones of the base (`baseBoneNames`), with every
- * body target; one material, Hair, alphaMode MASK; images ≤1024². Returns one line per problem; empty =
- * valid.
+ * body target and a head binding into the base's `bodyVertexCount` Body vertices on each primitive; one
+ * material, Hair, alphaMode MASK; images ≤1024². Returns one line per problem; empty = valid.
  */
-export function validateHair(doc: GlbDoc, baseBoneNames: string[]): string[] {
+export function validateHair(
+  doc: GlbDoc,
+  baseBoneNames: string[],
+  bodyVertexCount: number,
+): string[] {
   const json = doc.json;
   const problems: string[] = [];
 
@@ -69,6 +74,7 @@ export function validateHair(doc: GlbDoc, baseBoneNames: string[]): string[] {
     if (!targetNames.includes(t))
       problems.push(`body morph target ${t} is missing on ${mesh.name}`);
   }
+  problems.push(...headBindingProblems(doc, mesh, bodyVertexCount));
 
   const used = new Set<number>(mesh.primitives.map((p: any) => p.material));
   const materials = [...used].map((i) => json.materials[i]);

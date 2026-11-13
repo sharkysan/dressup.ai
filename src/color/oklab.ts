@@ -1,11 +1,13 @@
 /** Minimal sRGB ↔ OKLab conversion for perceptual colour maths (spec §6/§7). */
 export type Oklab = { L: number; a: number; b: number };
 
-function srgbToLinear(c: number): number {
+/** An sRGB channel value (0..1) in linear light. */
+export function srgbToLinear(c: number): number {
   return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
 }
 
-function linearToSrgb(c: number): number {
+/** A linear-light channel value encoded to sRGB, clamped to 0..1. */
+export function linearToSrgb(c: number): number {
   const v = c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
   return Math.min(1, Math.max(0, v));
 }

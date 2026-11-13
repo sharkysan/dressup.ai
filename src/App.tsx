@@ -1,9 +1,11 @@
 import { useEffect } from 'react';
 import { analyzePhoto } from './analysis/analyze';
 import { loadModels } from './analysis/mediapipe';
+import { likenessStatus } from './likeness/likenessMorph';
+import { likenessSchema, type Likeness } from './likeness/types';
 import { supportsWebGL2 } from './scene/supportsWebGL2';
 import { Viewer } from './scene/Viewer';
-import { nodeScreenPoint } from './scene/viewerHandle';
+import { getViewerHandle, nodeScreenPoint } from './scene/viewerHandle';
 import { useAppStore } from './store/useAppStore';
 import { AnalysisPage } from './ui/dev/AnalysisPage';
 import { isAnalysisRoute, isDevPanelEnabled } from './ui/dev/devFlag';
@@ -19,9 +21,26 @@ declare global {
       analysis: { analyzePhoto: typeof analyzePhoto; loadModels: typeof loadModels };
       /** Dev/e2e: a scene node's position in canvas CSS pixels, with the canvas size. */
       nodeScreenPoint: typeof nodeScreenPoint;
+      /**
+       * Dev/e2e: puts a likeness on the avatar (validated; null for the default face), and reports the
+       * meshes showing it (its morph at influence 1) and whether the brows show.
+       */
+      likeness: {
+        set(likeness: Likeness | null): void;
+        status(): { meshes: string[]; browsVisible: boolean };
+      };
     };
   }
 }
+
+const likenessHook = {
+  set: (likeness: Likeness | null) =>
+    useAppStore.getState().setLikeness(likeness && likenessSchema.parse(likeness)),
+  status: () => {
+    const scene = getViewerHandle()?.scene;
+    return scene ? likenessStatus(scene) : { meshes: [], browsVisible: false };
+  },
+};
 
 export default function App() {
   const dev = isDevPanelEnabled();
@@ -31,6 +50,7 @@ export default function App() {
         store: useAppStore,
         analysis: { analyzePhoto, loadModels },
         nodeScreenPoint,
+        likeness: likenessHook,
       };
     }
   }, [dev]);

@@ -1,11 +1,23 @@
 import type { Catalog } from '../catalog/catalog';
 import type { AvatarParams } from '../catalog/params';
+import { buildLikeness, type LikenessDebug } from '../likeness/buildLikeness';
+import { loadCorrespondence, type Correspondence } from '../likeness/correspondence';
+import type { Likeness } from '../likeness/types';
 import { strings } from '../ui/strings';
-import { decodePhoto, DecodeError } from './image';
+import { cropFace, decodePhoto, DecodeError } from './image';
 import { faceBox, headPose, toPixels } from './landmarks';
 import { analyzeToParams, type AnalysisDebug } from './mapping';
+import { hairRegion } from './mapping/hair';
+import { dilateMask, expandBox, maskForCrop, restrictToBox } from './masks';
 import { detectFaces, loadModels, segment, type ModelProgress } from './mediapipe';
-import type { Box, CategoryMask, FaceObservation } from './types';
+import {
+  MASK,
+  type Box,
+  type CategoryMask,
+  type FaceObservation,
+  type Point2,
+  type RgbaImage,
+} from './types';
 
 export type AnalysisErrorCode = 'models' | 'decode' | 'no_face' | 'face_too_small' | 'face_turned';
 
@@ -18,15 +30,36 @@ export class AnalysisError extends Error {
   }
 }
 
-/** Spec §6 gates on the downscaled image. */
-export const GATES = { minFaceWidthPx: 120, maxYawDeg: 30, maxPitchDeg: 30 } as const;
+/**
+ * Spec §6 gates on the chosen face. Hard gates: the face box ≥ `minFaceWidthPx` wide in the downscaled
+ * image, |yaw| and |pitch| within their limits. The projection gate: the face box ≥
+ * `minProjectionFaceWidthPx` wide in the full-resolution photo, below which the analysis keeps the
+ * default face (no Likeness).
+ */
+export const GATES = {
+  minFaceWidthPx: 120,
+  maxYawDeg: 20,
+  maxPitchDeg: 20,
+  minProjectionFaceWidthPx: 256,
+} as const;
+
+/**
+ * The full-resolution face crop the likeness is projected from: the face box grown `expand`× about its
+ * centre. The segmenter's hair mask is coarse: the model runs at 256², so on a 12 MP photo one of its
+ * cells spans ~16 full-resolution pixels and the mask's edge can sit ~8 px inside the hair. The crop's
+ * hair mask is therefore dilated by `hairDilatePx` crop pixels (at the crop's usual scale of 1, ~half a
+ * cell): hair left outside the mask would smear into the face, while skin masked by mistake is only
+ * refilled from the skin around it.
+ */
+export const FACE_CROP = { expand: 1.6, hairDilatePx: 8 } as const;
 
 export type Adapter = {
   loadModels: typeof loadModels;
+  loadCorrespondence: typeof loadCorrespondence;
   detectFaces: typeof detectFaces;
   segment: typeof segment;
 };
-const realAdapter: Adapter = { loadModels, detectFaces, segment };
+const realAdapter: Adapter = { loadModels, loadCorrespondence, detectFaces, segment };
 
 export type AnalyzeResult = {
   params: AvatarParams;
@@ -35,6 +68,15 @@ export type AnalyzeResult = {
   mask: CategoryMask;
   preview: HTMLCanvasElement;
   faceBox: Box;
+  /** The photo face when likenessGate is 'ok'; otherwise null, and `params.face` is 'default'. */
+  likeness: Likeness | null;
+  /**
+   * 'ok': the photo face was built. 'too_small': the face is below the projection gate
+   * (GATES.minProjectionFaceWidthPx). 'failed': the face passed every gate, but building the photo face
+   * failed (a head fit that is not finite, no 2-D canvas, no encoder).
+   */
+  likenessGate: 'ok' | 'too_small' | 'failed';
+  likenessDebug: LikenessDebug | null;
 };
 
 export function pickLargest(faces: FaceObservation[]): FaceObservation | undefined {
@@ -67,8 +109,11 @@ export function applyGates(face: FaceObservation): void {
 }
 
 /**
- * Photo → AvatarParams, entirely on the device: load models → decode → detect → largest face →
- * gates → segment → map. Every failure is an AnalysisError with a user-facing message (messageFor).
+ * Photo → AvatarParams and the Likeness, entirely on the device: load models and correspondence →
+ * decode → detect → largest face → gates → segment → map → (projection gate) → crop → likeness. Every
+ * expected failure is an AnalysisError with a user-facing message (messageFor). A failure while building
+ * the likeness does not reject: the params come back with the default face, `likeness: null` and
+ * `likenessGate: 'failed'`. The full-resolution bitmap is closed whatever happens.
  */
 export async function analyzePhoto(
   file: Blob,
@@ -80,8 +125,12 @@ export async function analyzePhoto(
   },
 ): Promise<AnalyzeResult> {
   const adapter = opts.adapter ?? realAdapter;
+  let corr: Correspondence;
   try {
-    await adapter.loadModels(opts.onProgress);
+    [, corr] = await Promise.all([
+      adapter.loadModels(opts.onProgress),
+      adapter.loadCorrespondence(),
+    ]);
   } catch (cause) {
     throw new AnalysisError('models', cause instanceof Error ? cause.message : String(cause));
   }
@@ -92,20 +141,113 @@ export async function analyzePhoto(
     if (cause instanceof DecodeError) throw new AnalysisError('decode', cause.message);
     throw cause;
   }
-  const faces = adapter.detectFaces(decoded.canvas);
-  const face = pickLargest(faces);
-  if (!face) throw new AnalysisError('no_face');
-  applyGates(face);
-  const mask = adapter.segment(decoded.canvas);
-  const box = faceBox(toPixels(face));
-  const { params, debug } = analyzeToParams(
-    { face, mask, image: decoded.image, faceBox: box },
-    {
-      catalog: opts.catalog,
-      current: opts.current,
-    },
+  try {
+    const faces = adapter.detectFaces(decoded.canvas);
+    const face = pickLargest(faces);
+    if (!face) throw new AnalysisError('no_face');
+    applyGates(face);
+    const mask = adapter.segment(decoded.canvas);
+    const box = faceBox(toPixels(face));
+    const { params, debug } = analyzeToParams(
+      { face, mask, image: decoded.image, faceBox: box },
+      {
+        catalog: opts.catalog,
+        current: opts.current,
+      },
+    );
+    const result = { debug, face, mask, preview: decoded.canvas, faceBox: box };
+    const fullWidth = (box.width * decoded.bitmap.width) / decoded.image.width;
+    if (fullWidth < GATES.minProjectionFaceWidthPx) {
+      return {
+        ...result,
+        params: { ...params, face: 'default' },
+        likeness: null,
+        likenessGate: 'too_small',
+        likenessDebug: null,
+      };
+    }
+    let built: Awaited<ReturnType<typeof buildLikeness>>;
+    try {
+      const crop = faceCrop(decoded.bitmap, decoded.image, face, box, mask);
+      built = await buildLikeness({ face, crop, sourceSkin: params.skin }, corr);
+    } catch {
+      // Spec §3: the photo, the crop and the offsets stay out of logs, so the error is not printed.
+      console.warn("analyzePhoto: couldn't build the photo face; using the default face");
+      return {
+        ...result,
+        params: { ...params, face: 'default' },
+        likeness: null,
+        likenessGate: 'failed',
+        likenessDebug: null,
+      };
+    }
+    return {
+      ...result,
+      params: { ...params, face: 'photo' },
+      likeness: built.likeness,
+      likenessGate: 'ok',
+      likenessDebug: built.debug,
+    };
+  } finally {
+    decoded.bitmap.close();
+  }
+}
+
+/**
+ * The likeness's view of the photo: the full-resolution crop around the face (FACE_CROP), with the
+ * landmarks and the hair mask in its pixels. `image` is the analysed (downscaled) copy that `box` and
+ * `mask` are over. As in analyzeToParams, only hair within hairRegion counts.
+ */
+function faceCrop(
+  bitmap: ImageBitmap,
+  image: RgbaImage,
+  face: FaceObservation,
+  box: Box,
+  mask: CategoryMask,
+): { image: RgbaImage; landmarks: Point2[]; hair: Uint8Array } {
+  const full = { width: bitmap.width, height: bitmap.height };
+  const kx = full.width / image.width;
+  const ky = full.height / image.height;
+  const atFull = (b: Box): Box => ({
+    x: b.x * kx,
+    y: b.y * ky,
+    width: b.width * kx,
+    height: b.height * ky,
+  });
+  const rect = wholePixels(expandBox(atFull(box), FACE_CROP.expand, full.width, full.height), full);
+  const crop = cropFace(bitmap, rect);
+  const { width, height } = crop.image;
+  const toCrop = (b: Box): Box => ({
+    x: (b.x - rect.x) * crop.scale,
+    y: (b.y - rect.y) * crop.scale,
+    width: b.width * crop.scale,
+    height: b.height * crop.scale,
+  });
+  const landmarks = face.landmarks.map((p) => ({
+    x: (p.x * full.width - rect.x) * crop.scale,
+    y: (p.y * full.height - rect.y) * crop.scale,
+  }));
+  const region = toCrop(atFull(hairRegion(box, image.width, image.height)));
+  const hair = restrictToBox(
+    maskForCrop(mask, MASK.hair, rect, crop.scale, full, crop.image),
+    width,
+    height,
+    region,
   );
-  return { params, debug, face, mask, preview: decoded.canvas, faceBox: box };
+  return {
+    image: crop.image,
+    landmarks,
+    hair: dilateMask(hair, width, height, FACE_CROP.hairDilatePx),
+  };
+}
+
+/** The smallest box of whole pixels that holds `box`, within the image. */
+function wholePixels(box: Box, image: { width: number; height: number }): Box {
+  const x = Math.max(0, Math.floor(box.x));
+  const y = Math.max(0, Math.floor(box.y));
+  const right = Math.min(image.width, Math.ceil(box.x + box.width));
+  const bottom = Math.min(image.height, Math.ceil(box.y + box.height));
+  return { x, y, width: right - x, height: bottom - y };
 }
 
 export function messageFor(code: AnalysisErrorCode): string {

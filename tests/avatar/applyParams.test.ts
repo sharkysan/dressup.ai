@@ -4,7 +4,13 @@ import { applyParams, setExpression } from '../../src/avatar/applyParams';
 import { ALL_BODY_TARGETS, type BaseMeta } from '../../src/avatar/baseContract';
 import { EyeTextures } from '../../src/avatar/baseMaterials';
 import { avatarScale, bodyInfluences, groundOffset } from '../../src/avatar/body';
-import { GARMENT_ROUGHNESS, SkinTexture } from '../../src/avatar/bodyTexture';
+import {
+  GARMENT_ROUGHNESS,
+  SkinTexture,
+  composeBodyAlbedo,
+  skinGain,
+  type FaceComposite,
+} from '../../src/avatar/bodyTexture';
 import { defaultParams, type AvatarParams } from '../../src/catalog/params';
 
 const meta: BaseMeta = {
@@ -20,6 +26,7 @@ const SIZE = 4;
 const skinPixels = Uint8ClampedArray.from({ length: SIZE * SIZE * 4 }, (_, i) =>
   i % 4 === 3 ? 255 : (i * 7) % 256,
 );
+const skinImage = { data: skinPixels, width: SIZE, height: SIZE };
 /** Base layer: the first texel opaque crop top, the rest clear. */
 const baseLayer = {
   data: Uint8ClampedArray.from({ length: SIZE * SIZE * 4 }, (_, i) =>
@@ -89,12 +96,28 @@ function fakeVrm() {
 }
 
 const eyeTexture = new Texture();
-function context() {
+function context(face: FaceComposite | null = null) {
   const canvasPixels = fakeCanvas();
   const skin = new SkinTexture({} as CanvasImageSource, baseLayer, 0.5);
   const eyes = new EyeTextures(() => Promise.resolve(eyeTexture));
-  return { ctx: { skin, eyes, meta }, canvasPixels };
+  return { ctx: { skin, eyes, meta, face }, canvasPixels };
 }
+
+/** A 2×2 opaque face on the skin texture's bottom-right quarter. */
+const testFace: FaceComposite = {
+  pixels: {
+    data: Uint8ClampedArray.from({ length: 16 }, (_, i) => [210, 160, 130, 255][i % 4]!),
+    width: 2,
+    height: 2,
+  },
+  sourceSkin: '#c68642',
+  rect: { u: 0.5, v: 0.5, size: 0.5 },
+};
+
+/** The skin canvas expected for `tint` (and `face`): the test skin composited at its own gain. */
+const albedo = (tint: string, face?: FaceComposite) =>
+  composeBodyAlbedo(skinImage, baseLayer, tint, skinGain(skinImage, baseLayer), undefined, face)
+    .data;
 
 const params = (patch: Partial<AvatarParams> = {}): AvatarParams => ({
   ...defaultParams,
@@ -132,14 +155,41 @@ test('applyParams puts the tinted skin under the base layer, sets the eyes and t
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   expect(skin.map).toBe(ctx.skin.update('#8d5524'));
-  const pixels = canvasPixels();
-  expect([...pixels.slice(0, 4)]).toEqual([233, 230, 225, 255]); // the crop top, untinted
-  expect(pixels[4]).toBe(Math.round((skinPixels[4]! * 0x8d) / 255)); // tinted skin
+  expect(canvasPixels()).toEqual(albedo('#8d5524'));
   expect(setEyes).toHaveBeenCalledWith(eyes, 'blue');
   expect(eyes.map).toBe(eyeTexture);
   expect(eyes.alphaTest).toBe(0.5);
   expect('#' + brows.color.getHexString()).toBe('#4a2f1b');
   expect('#' + lashes.color.getHexString()).toBe('#4a2f1b');
+});
+
+test('applyParams sets the Skin colour to the skin gain (linear RGB)', () => {
+  const { vrm, skin } = fakeVrm();
+  const { ctx } = context();
+
+  applyParams(vrm, params(), ctx);
+
+  const gain = skinGain(skinImage, baseLayer);
+  expect(ctx.skin.gain).toEqual(gain);
+  expect(Math.min(...gain)).toBeGreaterThan(1);
+  expect([skin.color.r, skin.color.g, skin.color.b]).toEqual(gain);
+  // Tint changes leave it alone.
+  applyParams(vrm, params({ skin: '#f1d7c8' }), ctx);
+  expect([skin.color.r, skin.color.g, skin.color.b]).toEqual(gain);
+});
+
+test("applyParams composites the context's face into the skin", () => {
+  const { vrm, skin } = fakeVrm();
+  const { ctx, canvasPixels } = context(testFace);
+
+  applyParams(vrm, params(), ctx);
+
+  expect(skin.map).toBe(ctx.skin.texture);
+  expect(canvasPixels()).toEqual(albedo('#8d5524', testFace));
+  expect(albedo('#8d5524', testFace)).not.toEqual(albedo('#8d5524'));
+  // No face: the plain skin.
+  applyParams(vrm, params(), { ...ctx, face: null });
+  expect(canvasPixels()).toEqual(albedo('#8d5524'));
 });
 
 test('applyParams gives the skin the base layer roughness map at roughness 1: matte garments, the skin as it was', () => {
