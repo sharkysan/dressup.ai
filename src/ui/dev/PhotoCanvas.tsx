@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { LM, toPixels } from '../../analysis/landmarks';
 import { categoryEquals, resampleMask, restrictToBox } from '../../analysis/masks';
-import type { BodyMeasurement } from '../../analysis/body/measure';
+import { personRegion, type BodyMeasurement } from '../../analysis/body/measure';
 import { POSE, posePixels } from '../../analysis/pose';
 import {
   MASK,
@@ -40,7 +40,8 @@ const TOGGLES = ['landmarks', 'box', 'hair', 'skin', 'pose', 'body', 'silhouette
 
 /**
  * The analysed photo with toggleable overlays: landmarks, face box, hair and face-skin masks, the pose's
- * skeleton, the body measurement and the silhouette it read. All in the analysed image's pixels.
+ * skeleton, the person region and the silhouette the body measurement reads (whenever there is a pose),
+ * and the measurement's lines (when there is one). All in the analysed image's pixels.
  */
 export function PhotoCanvas({ preview, face, mask, faceBox, pose, measurement }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -86,13 +87,12 @@ export function PhotoCanvas({ preview, face, mask, faceBox, pose, measurement }:
     if (show.hair) tint([MASK.hair], '80,60,220,0.45');
     if (show.skin) tint([MASK.faceSkin], '40,200,120,0.35');
 
-    if (show.silhouette && measurement) {
+    // The person region the measurement reads, from the pose and the face box: drawn with or without a
+    // measurement, since a body measureBody can't measure is the one most worth seeing.
+    const region = pose ? personRegion(pose, faceBox, width, height) : null;
+    if (show.silhouette && region) {
       // What the measurement reads: body and hair within the person region.
-      tint(
-        [MASK.hair, MASK.bodySkin, MASK.faceSkin, MASK.clothes],
-        '255,140,0,0.35',
-        measurement.region,
-      );
+      tint([MASK.hair, MASK.bodySkin, MASK.faceSkin, MASK.clothes], '255,140,0,0.35', region);
     }
 
     if (show.box) {
@@ -123,21 +123,23 @@ export function PhotoCanvas({ preview, face, mask, faceBox, pose, measurement }:
       ctx.fillStyle = '#7CFC00';
       for (const p of px) ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
     }
+    if (show.body && region) {
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(region.x, region.y, region.width, region.height);
+    }
     if (show.body && measurement) {
-      const { region, headTopY, ankleY, lines } = measurement;
+      const { region: within, headTopY, ankleY, lines } = measurement;
       const hline = (y: number, color: string) => {
         ctx.strokeStyle = color;
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(region.x, y);
-        ctx.lineTo(region.x + region.width, y);
+        ctx.moveTo(within.x, y);
+        ctx.lineTo(within.x + within.width, y);
         ctx.stroke();
       };
       hline(headTopY, '#ff00ff');
       hline(ankleY, '#ff00ff');
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(region.x, region.y, region.width, region.height);
       ctx.strokeStyle = '#ff8c00';
       ctx.lineWidth = 2;
       for (const { a, b } of lines) {

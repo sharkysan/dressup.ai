@@ -103,6 +103,22 @@ test('a models failure shows the message and a retry button', async () => {
   expect(screen.getByTestId('analysis-status')).toHaveAttribute('data-analysis', 'error');
 });
 
+test.each([
+  [new AnalysisError('face_too_small', 'face 87 px wide'), 'face_too_small'],
+  [new AnalysisError('face_turned', 'yaw 31°, pitch -4°'), 'face_turned'],
+  [new Error('segmenter failed'), 'segmenter failed'],
+])(
+  'a failure logs only the AnalysisError’s code, or another error’s message: %s',
+  async (error, logged) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.mocked(analyzePhoto).mockRejectedValue(error);
+    render(<AnalysisPage />);
+    await act(async () => upload());
+    await screen.findByText(strings.analysis.retry);
+    expect(warn.mock.calls).toEqual([['analysis failed:', logged]]);
+  },
+);
+
 test('a successful analysis applies params and marks done', async () => {
   vi.mocked(analyzePhoto).mockResolvedValue(base);
   render(<AnalysisPage />);

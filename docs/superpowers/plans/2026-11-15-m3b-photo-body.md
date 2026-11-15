@@ -342,7 +342,7 @@ git commit -m "feat(analysis): body gate and body measurement from pose landmark
 - Produces:
   - `estimate.ts`:
     - `CALIBRATED_MORPHS`: `BODY_MORPHS` without `'gender'` (8), with `CalibratedMorph`.
-    - `bodyCalibrationSchema` and `BodyCalibration`: `{ version: 1; degree: 1 | 2; features: BodyFeature[]; allowance: Record<WidthFeature, number>; mean: number[]; scale: number[]; coefficients: Record<CalibratedMorph, number[]>; holdout: { n: number; maxAbsError: Record<CalibratedMorph, number> }; setup: { train: number; holdout: number; seed: number; armDownDeg: number; render: [number, number] } }`. The schema enforces:
+    - `bodyCalibrationSchema` and `BodyCalibration`: `{ version: 1; degree: 1 | 2; features: BodyFeature[]; allowance: Record<WidthFeature, number>; mean: number[]; scale: number[]; coefficients: Record<CalibratedMorph, number[]>; holdout: { n: number; outlineError: Record<BodyFeature, number>; maxAbsError: Record<CalibratedMorph, number> }; setup: { train: number; holdout: number; seed: number; armDownDeg: number; render: [number, number] } }`. The schema enforces:
       - `features` equals `BODY_FEATURES` in order;
       - `allowance` ≥ 0;
       - `mean` and `scale` are 11 long (10 features + gender), with `scale` > 0;
@@ -434,7 +434,7 @@ The CLI:
 2. Shares out `sampleBodies(train, seed)` and `sampleBodies(holdout, seed + 1)` and collects each `sample()`.
 3. Drops samples with an error or a gate other than `'ok'`, and fails if more than 2 % are dropped.
 4. Fits degree 1 and degree 2, standardising on the training set and choosing λ per morph with `chooseLambda`.
-5. Scores both degrees on the held-out set by the clamped maximum absolute error per morph, and keeps the one whose worst morph is lower.
+5. Re-renders both degrees' held-out estimates and measures them again, and keeps the degree with the lower worst outline ratio (`outlineError`, ruling 6); ties go to degree 1. The clamped maximum absolute error per morph is recorded for information only.
 6. Writes both files with `writeAtomically`, then prints the per-morph table for both degrees.
 7. Exits 1 if the kept degree misses the target of ruling 6. It writes the files first, so the numbers can be inspected.
 

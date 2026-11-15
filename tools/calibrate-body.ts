@@ -9,7 +9,12 @@
  * is lower is kept. It writes src/analysis/body-calibration.json and tests/fixtures/body-holdout.json,
  * prints the held-out error per morph and per ratio at both degrees, and exits 1 (after writing, so the
  * numbers can be inspected) when a held-out estimate's re-render fails or a kept ratio's outline error
- * is over OUTLINE_TOLERANCE (spec §15).
+ * is over OUTLINE_TOLERANCE (spec §15). A sample that takes over SAMPLE_TIMEOUT_MS (a stuck page) is
+ * retried once on a reopened page.
+ *
+ * The app parses src/analysis/body-calibration.json when it loads, and this CLI runs the app: after a
+ * change to bodyCalibrationSchema, migrate the shipped file by hand first, or no page starts and the run
+ * can't regenerate it.
  */
 import { chromium, type Browser, type Page } from '@playwright/test';
 import fs from 'node:fs';
@@ -44,6 +49,12 @@ const HOLDOUT_FILE = path.resolve('tests/fixtures/body-holdout.json');
 /** The share of samples that may be dropped (an analysis error, or a body gate other than 'ok'). */
 const MAX_DROPPED = 0.02;
 const READY_TIMEOUT_MS = 120_000;
+/**
+ * The longest one sample may take; one takes under a minute on its page, even with four pages under
+ * load. Past it the page is taken as stuck (a lost WebGL context, a model that never starts) and goes
+ * through the reopen-and-retry path.
+ */
+const SAMPLE_TIMEOUT_MS = 180_000;
 
 type Input = { body: AvatarParams['body']; skin: string };
 type Measured = Input & { features: BodyFeatures };
@@ -252,8 +263,24 @@ async function openPage(browser: Browser, url: string): Promise<Page> {
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-function sampleOn(page: Page, input: Input): Promise<CalibrationSample> {
-  return page.evaluate((i) => window.__kiss!.calibration.sample(i), input);
+/** The page's sample of `input`; throws when it takes over SAMPLE_TIMEOUT_MS. */
+async function sampleOn(page: Page, input: Input): Promise<CalibrationSample> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`no sample after ${SAMPLE_TIMEOUT_MS / 1000} s`)),
+      SAMPLE_TIMEOUT_MS,
+    );
+  });
+  try {
+    // A stuck evaluate settles, rejected, when the retry path closes its page.
+    return await Promise.race([
+      page.evaluate((i) => window.__kiss!.calibration.sample(i), input),
+      timeout,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function progress(done: number, total: number, started: number) {

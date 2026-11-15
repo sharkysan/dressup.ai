@@ -62,7 +62,12 @@ export function AnalysisPage() {
     } catch (e) {
       setStatus('error');
       setError(e instanceof AnalysisError ? messageFor(e.code) : String(e));
-      console.warn('analysis failed:', e);
+      // Spec §3: no measurements in logs. An AnalysisError's message holds the face's width in px or
+      // its yaw and pitch, so only its code is logged; any other error, its message, not the object.
+      console.warn(
+        'analysis failed:',
+        e instanceof AnalysisError ? e.code : e instanceof Error ? e.message : String(e),
+      );
     }
   }
 
