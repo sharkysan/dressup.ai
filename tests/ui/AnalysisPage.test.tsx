@@ -7,12 +7,17 @@ import type { Likeness } from '../../src/likeness/types';
 import { useAppStore } from '../../src/store/useAppStore';
 import { AnalysisPage } from '../../src/ui/dev/AnalysisPage';
 import { strings } from '../../src/ui/strings';
+import { downloadBlob } from '../../src/export/download';
+import { BODY_FEATURES, type BodyMeasurement } from '../../src/analysis/body/measure';
+import type { BodyGate } from '../../src/analysis/body/gate';
+import type { PoseObservation } from '../../src/analysis/types';
 import { synthFace } from '../../tools/test-fixtures/canonicalFace';
 
 vi.mock('../../src/analysis/analyze', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../../src/analysis/analyze')>();
   return { ...mod, analyzePhoto: vi.fn() };
 });
+vi.mock('../../src/export/download', () => ({ downloadBlob: vi.fn() }));
 vi.mock('../../src/scene/Viewer', () => ({ Viewer: () => <div data-testid="viewer" /> }));
 vi.mock('../../src/likeness/correspondence', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/likeness/correspondence')>()),
@@ -202,4 +207,100 @@ test("the face texture's object URL is revoked when the result changes and on un
   expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:face-1');
   view.unmount();
   expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:face-2');
+});
+
+const GATES: BodyGate[] = ['ok', 'no_pose', 'not_visible', 'turned'];
+
+const pose: PoseObservation = {
+  landmarks: Array.from({ length: 33 }, (_, i) => ({
+    x: 0.5,
+    y: i / 40,
+    z: 0,
+    visibility: 1,
+  })),
+  world: Array.from({ length: 33 }, () => ({ x: 0, y: 0, z: 0 })),
+  imageWidth: 100,
+  imageHeight: 200,
+};
+
+const measurement: BodyMeasurement = {
+  features: Object.fromEntries(
+    BODY_FEATURES.map((f, i) => [f, 0.1234 + i]),
+  ) as BodyMeasurement['features'],
+  heightPx: 150,
+  headTopY: 10,
+  ankleY: 160,
+  region: { x: 0, y: 0, width: 100, height: 200 },
+  armsTouching: { left: false, right: false },
+  lines: [],
+};
+
+const measured: AnalyzeResult = {
+  ...base,
+  pose,
+  body: { gate: 'ok', measurement },
+  params: {
+    ...base.params,
+    body: { ...base.params.body, gender: 0.25, weight: 0.5, muscle: -0.5, heightCm: 172 },
+  },
+};
+
+test('the height input defaults to the store height and reaches analyzePhoto', async () => {
+  vi.mocked(analyzePhoto).mockResolvedValue(base);
+  render(<AnalysisPage />);
+  const input = screen.getByTestId('height-input') as HTMLInputElement;
+  expect(input).toHaveAttribute('min', '140');
+  expect(input).toHaveAttribute('max', '210');
+  expect(input.value).toBe(String(useAppStore.getState().params.body.heightCm));
+  fireEvent.change(input, { target: { value: '182' } });
+  await act(async () => upload());
+  await screen.findByText('Apply to avatar');
+  expect(vi.mocked(analyzePhoto).mock.calls[0]![1]).toMatchObject({ heightCm: 182 });
+});
+
+test.each(GATES)('the body gate line for %s', async (gate) => {
+  vi.mocked(analyzePhoto).mockResolvedValue({ ...base, body: { gate, measurement: null } });
+  render(<AnalysisPage />);
+  await act(async () => upload());
+  await screen.findByText('Apply to avatar');
+  expect(screen.getByTestId('body-gate')).toHaveTextContent(strings.analysis.bodyGate[gate]);
+});
+
+test('with a measurement, the body panel lists the ten features and the body parameters', async () => {
+  vi.mocked(analyzePhoto).mockResolvedValue(measured);
+  render(<AnalysisPage />);
+  await act(async () => upload());
+  await screen.findByText('Apply to avatar');
+  BODY_FEATURES.forEach((f, i) =>
+    expect(screen.getByTestId(`feature-${f}`)).toHaveTextContent((0.1234 + i).toFixed(3)),
+  );
+  expect(screen.getByTestId('body-morph-gender')).toHaveTextContent('0.25');
+  expect(screen.getByTestId('body-morph-weight')).toHaveTextContent('0.50');
+  expect(screen.getByTestId('body-morph-muscle')).toHaveTextContent('-0.50');
+  expect(screen.getAllByTestId(/^body-morph-/)).toHaveLength(9);
+});
+
+test('without a measurement, no feature rows show', async () => {
+  vi.mocked(analyzePhoto).mockResolvedValue(base);
+  render(<AnalysisPage />);
+  await act(async () => upload());
+  await screen.findByText('Apply to avatar');
+  expect(screen.queryAllByTestId(/^feature-/)).toHaveLength(0);
+});
+
+test('the recorded fixture includes the pose and the body gate', async () => {
+  vi.mocked(analyzePhoto).mockResolvedValue(measured);
+  render(<AnalysisPage />);
+  await act(async () => upload());
+  await screen.findByText('Apply to avatar');
+  fireEvent.click(screen.getByText('Record fixture'));
+  const blob = vi.mocked(downloadBlob).mock.calls[0]![0];
+  const text = await new Promise<string>((resolve) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result as string);
+    r.readAsText(blob);
+  });
+  const fixture = JSON.parse(text);
+  expect(fixture.pose).toEqual(pose);
+  expect(fixture.body).toEqual({ gate: 'ok' });
 });

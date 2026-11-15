@@ -80,12 +80,23 @@ test.describe('with models', () => {
     await expect(page.getByTestId('viewer')).toHaveAttribute('data-status', 'ready', {
       timeout: 45_000,
     });
+    await page.getByTestId('height-input').fill('172');
     await page.getByTestId('photo-input').setInputFiles(path.join(PHOTOS_DIR, photo!));
     const status = page.getByTestId('analysis-status');
     await expect(status).toHaveAttribute('data-analysis', 'done', { timeout: 90_000 });
     const params = await page.evaluate(() => window.__kiss!.store.getState().params);
     expect(params.version).toBe(2);
     expect(params.skin).toMatch(/^#[0-9a-f]{6}$/i);
+
+    // The body: one of the four gate lines, the entered height, every morph in range.
+    expect(Object.values<string>(strings.analysis.bodyGate)).toContain(
+      await page.getByTestId('body-gate').textContent(),
+    );
+    expect(params.body.heightCm).toBe(172);
+    for (const [key, value] of Object.entries(params.body)) {
+      if (key === 'heightCm') continue;
+      expect(Math.abs(value)).toBeLessThanOrEqual(1);
+    }
 
     // The photo face, when the face passes the projection gate (≥ 256 px wide at full resolution).
     const gate = await page.getByTestId('likeness-gate').textContent();
