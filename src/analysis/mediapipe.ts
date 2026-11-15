@@ -4,13 +4,14 @@ import {
   ImageSegmenter,
   PoseLandmarker,
 } from '@mediapipe/tasks-vision';
+import { MODEL_FILES } from './modelFiles';
 import type { CategoryMask, FaceObservation, PoseObservation } from './types';
 
 /** Self-hosted model and wasm locations (spec §4/§6: nothing fetched from third parties at runtime). */
 export const MODEL_URLS = {
-  faceLandmarker: '/models/face_landmarker.task',
-  poseLandmarker: '/models/pose_landmarker_full.task',
-  segmenter: '/models/selfie_multiclass_256x256.tflite',
+  faceLandmarker: `/models/${MODEL_FILES.faceLandmarker}`,
+  poseLandmarker: `/models/${MODEL_FILES.poseLandmarker}`,
+  segmenter: `/models/${MODEL_FILES.segmenter}`,
   wasm: '/mediapipe/wasm',
 } as const;
 

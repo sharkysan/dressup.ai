@@ -3,14 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PNG } from 'pngjs';
 import { strings } from '../src/ui/strings';
+import { skipWithoutModels } from './helpers/models';
 
-const MODELS_DIR = path.resolve('public/models');
 const PHOTOS_DIR = path.resolve('e2e/fixtures/photos');
-const modelsPresent = [
-  'face_landmarker.task',
-  'pose_landmarker_full.task',
-  'selfie_multiclass_256x256.tflite',
-].every((name) => fs.existsSync(path.join(MODELS_DIR, name)));
 
 /** A flat mid-grey image: decodes fine, contains no face. */
 function blankPng(size = 512): Buffer {
@@ -56,8 +51,7 @@ test('a failed model download shows the friendly message with retry', async ({ p
 });
 
 test.describe('with models', () => {
-  // Models are fetched by `npm run assets:models` (CI) and git-ignored; skip, don't fail, where absent.
-  test.skip(!modelsPresent, 'MediaPipe models not present under public/models');
+  skipWithoutModels();
   // Under software WebGL each model's first run compiles its shaders: ~10–15 s apiece.
   test.describe.configure({ timeout: 150_000 });
 
