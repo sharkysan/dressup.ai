@@ -11,13 +11,7 @@ import { PNG } from 'pngjs';
 import sharp from 'sharp';
 import { cli, required } from './cli';
 import { assignLineups } from './lineup/assign';
-
-const LAUNCH_ARGS = [
-  '--use-gl=angle',
-  '--use-angle=swiftshader',
-  '--enable-unsafe-swiftshader',
-  '--ignore-gpu-blocklist',
-];
+import { SWIFTSHADER_ARGS } from './swiftshader';
 
 async function main() {
   const args = cli(['photos', 'out', 'seed', 'url'] as const, [] as const, {
@@ -33,7 +27,7 @@ async function main() {
     .sort();
   if (photos.length === 0) throw new Error(`no photos in ${photosDir}`);
 
-  const browser = await chromium.launch({ args: LAUNCH_ARGS });
+  const browser = await chromium.launch({ args: SWIFTSHADER_ARGS });
   const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
   const errors: Record<string, string> = {};
   const ids: string[] = [];

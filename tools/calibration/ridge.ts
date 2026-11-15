@@ -71,7 +71,8 @@ export function fitRidge(X: number[][], y: number[], lambda: number): number[] {
 /** 10^k for k = −4, −3.5, …, 2. */
 export const LAMBDAS: number[] = Array.from({ length: 13 }, (_, i) => 10 ** (-4 + i / 2));
 
-function mulberry32(seed: number): () => number {
+/** A seeded PRNG: uniform floats in [0, 1). */
+export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
     a = (a + 0x6d2b79f5) >>> 0;

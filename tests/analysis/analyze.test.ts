@@ -7,12 +7,18 @@ import {
   messageFor,
   pickLargest,
 } from '../../src/analysis/analyze';
+import calibrationJson from '../../src/analysis/body-calibration.json';
+import {
+  bodyCalibrationSchema,
+  estimateMorphs,
+  type BodyCalibration,
+} from '../../src/analysis/body/estimate';
 import { checkBodyGate } from '../../src/analysis/body/gate';
-import { headTopFactor, headTopY } from '../../src/analysis/body/measure';
+import { headTopFactor, headTopY, measureBody } from '../../src/analysis/body/measure';
 import { DecodeError } from '../../src/analysis/image';
 import { faceBox, LM, toPixels } from '../../src/analysis/landmarks';
 import { dilateMask, expandBox, maskForCrop } from '../../src/analysis/masks';
-import { faceFromCrop, headCropRect, POSE } from '../../src/analysis/pose';
+import { faceFromCrop, headCropRect, POSE, posePixels } from '../../src/analysis/pose';
 import {
   MASK,
   type Box,
@@ -310,7 +316,7 @@ describe('the body gate and the body measurement', () => {
     return analyzePhoto(blob, { catalog: null, current, heightCm, adapter: a });
   }
 
-  test("gate 'ok': the body is measured, and params.body is the default body at the entered height", async () => {
+  test("gate 'ok': the body is measured, and params.body is its estimate at the entered height", async () => {
     const result = await analyse(figure.pose, 180);
     expect(result.pose).toBe(figure.pose);
     expect(result.body.gate).toBe('ok');
@@ -320,9 +326,47 @@ describe('the body gate and the body measurement', () => {
       headTopY(person.face, headTopFactor(CORR)),
       9,
     );
-    // Every morph 0, the current gender, the height entered.
-    expect(result.params.body).toEqual({ ...defaultParams.body, gender: 0.7, heightCm: 180 });
+    // The shipped calibration's morphs for the measured features and the current gender; the current
+    // gender itself (never inferred) and the height entered.
+    const cal = bodyCalibrationSchema.parse(calibrationJson) as BodyCalibration;
+    const morphs = estimateMorphs(result.body.measurement!.features, 0.7, cal);
+    expect(result.params.body).toEqual({ ...morphs, gender: 0.7, heightCm: 180 });
+    expect(Object.values(morphs).some((v) => v !== 0)).toBe(true);
     expect(avatarParamsSchema.safeParse(result.params).success).toBe(true);
+    expect(result.likenessGate).toBe('ok');
+  });
+
+  test("a zero width (the upper arms labelled 'others', as a sleeve can be) → not_visible and the default body", async () => {
+    // The mid-upper-arm points, where the upper-arm width is walked from, are not body.
+    const data = figure.mask.data.slice();
+    const at = posePixels(figure.pose);
+    for (const [shoulder, elbow] of [
+      [POSE.shoulderL, POSE.elbowL],
+      [POSE.shoulderR, POSE.elbowR],
+    ] as const) {
+      const cx = Math.floor((at[shoulder]!.x + at[elbow]!.x) / 2);
+      const cy = Math.floor((at[shoulder]!.y + at[elbow]!.y) / 2);
+      for (let y = cy - 2; y <= cy + 2; y++) {
+        for (let x = cx - 2; x <= cx + 2; x++) data[y * figure.mask.width + x] = MASK.others;
+      }
+    }
+    const mask = { ...figure.mask, data };
+    // measureBody measures the body, but its upper-arm width is 0.
+    const measured = measureBody({
+      pose: figure.pose,
+      mask,
+      faceBox: faceBox(toPixels(person.face)),
+      headTopY: headTopY(person.face, headTopFactor(CORR)),
+      width: person.image.width,
+      height: person.image.height,
+    });
+    expect(measured!.features.upperArmWidth).toBe(0);
+    expect(measured!.features.waistWidth).toBeGreaterThan(0);
+
+    const result = await analyse(figure.pose, 180, mask);
+    expect(checkBodyGate(figure.pose)).toBe('ok');
+    expect(result.body).toEqual({ gate: 'not_visible', measurement: null });
+    expect(result.params.body).toEqual({ ...defaultParams.body, gender: 0.7, heightCm: 180 });
     expect(result.likenessGate).toBe('ok');
   });
 

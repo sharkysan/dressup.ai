@@ -4,6 +4,8 @@ import { buildLikeness, type LikenessDebug } from '../likeness/buildLikeness';
 import { loadCorrespondence, type Correspondence } from '../likeness/correspondence';
 import type { Likeness } from '../likeness/types';
 import { strings } from '../ui/strings';
+import calibrationJson from './body-calibration.json';
+import { bodyCalibrationSchema, estimateMorphs, type BodyCalibration } from './body/estimate';
 import { checkBodyGate, type BodyGate } from './body/gate';
 import { headTopFactor, headTopY, measureBody, type BodyMeasurement } from './body/measure';
 import { cropCanvas, cropFace, decodePhoto, DecodeError } from './image';
@@ -57,6 +59,9 @@ export const GATES = {
  */
 export const FACE_CROP = { expand: 1.6, hairDilatePx: 8 } as const;
 
+/** The body regression (spec §6), fitted by tools/calibrate-body.ts on renders of the avatar. */
+const BODY_CALIBRATION = bodyCalibrationSchema.parse(calibrationJson) as BodyCalibration;
+
 export type Adapter = {
   loadModels: typeof loadModels;
   loadCorrespondence: typeof loadCorrespondence;
@@ -77,8 +82,9 @@ export type AnalyzeResult = {
   pose: PoseObservation | null;
   /**
    * The body gate on `pose` (spec §6), and the body measured on the photo when it is 'ok'. A pose that
-   * passes checkBodyGate but whose body measureBody can't measure is 'not_visible' too, with no
-   * measurement. Whatever the gate, `params.body` is the default body (bodyParams).
+   * passes checkBodyGate but whose body measureBody can't measure, or whose features are not all finite
+   * and > 0, is 'not_visible' too, with no measurement. When the gate is 'ok', `params.body` is the
+   * calibration's estimate from the features; otherwise the default body (bodyParams).
    */
   body: { gate: BodyGate; measurement: BodyMeasurement | null };
   /** The photo face when likenessGate is 'ok'; otherwise null, and `params.face` is 'default'. */
@@ -170,7 +176,7 @@ export async function analyzePhoto(
     const pose = pickPose(poses, box);
     const mask = adapter.segment(decoded.canvas);
     const poseGate = checkBodyGate(pose);
-    const measurement =
+    const measured =
       pose && poseGate === 'ok'
         ? measureBody({
             pose,
@@ -181,7 +187,12 @@ export async function analyzePhoto(
             height: decoded.image.height,
           })
         : null;
-    // No body to measure on a pose that passed (spec §6, body.*): the default body, as for a hidden one.
+    // No body to measure on a pose that passed, or a ratio that isn't one (0 or not finite: spec §6,
+    // body.*): the default body, as for a hidden one.
+    const measurement =
+      measured && Object.values(measured.features).every((v) => Number.isFinite(v) && v > 0)
+        ? measured
+        : null;
     const gate: BodyGate = poseGate === 'ok' && !measurement ? 'not_visible' : poseGate;
     const mapped = analyzeToParams(
       { face, mask, image: decoded.image, faceBox: box },
@@ -190,7 +201,13 @@ export async function analyzePhoto(
         current: opts.current,
       },
     );
-    const params = { ...mapped.params, body: bodyParams(opts.current, opts.heightCm) };
+    const body = bodyParams(opts.current, opts.heightCm);
+    const params = {
+      ...mapped.params,
+      body: measurement
+        ? { ...body, ...estimateMorphs(measurement.features, body.gender, BODY_CALIBRATION) }
+        : body,
+    };
     const result = {
       debug: mapped.debug,
       face,
@@ -237,8 +254,8 @@ export async function analyzePhoto(
 }
 
 /**
- * The body the analysis returns (spec §6): every morph 0, the current gender (never inferred) and the
- * height entered, else the current height.
+ * The body the analysis returns without a measurement (spec §6): every morph 0, the current gender
+ * (never inferred) and the height entered, else the current height.
  */
 function bodyParams(
   current: AvatarParams | undefined,

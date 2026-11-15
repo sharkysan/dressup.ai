@@ -24,6 +24,8 @@ export type CalibrationSample = {
   bodyGate: BodyGate | null;
   /** The body's features when the gate passed, else null. */
   features: BodyFeatures | null;
+  /** The body the analysis returned (its params.body), null when it rejected. */
+  body: AvatarParams['body'] | null;
 };
 
 /** How long a sample waits for the hair to come off. */
@@ -84,6 +86,7 @@ async function sample(input: {
       likenessGate: result.likenessGate,
       bodyGate: result.body.gate,
       features: result.body.measurement?.features ?? null,
+      body: result.params.body,
     };
   } catch (error) {
     if (error instanceof AnalysisError) {
@@ -93,6 +96,7 @@ async function sample(input: {
         likenessGate: null,
         bodyGate: null,
         features: null,
+        body: null,
       };
     }
     throw error;

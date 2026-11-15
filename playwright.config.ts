@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+import { SWIFTSHADER_ARGS } from './tools/swiftshader';
 
 const port = 4173;
 
@@ -26,12 +27,7 @@ export default defineConfig({
         browserName: 'chromium',
         launchOptions: {
           // Software WebGL so the 3D scene renders in headless CI.
-          args: [
-            '--use-gl=angle',
-            '--use-angle=swiftshader',
-            '--enable-unsafe-swiftshader',
-            '--ignore-gpu-blocklist',
-          ],
+          args: SWIFTSHADER_ARGS,
         },
       },
     },

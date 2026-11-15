@@ -17,7 +17,8 @@ test('a full-length render of the avatar is analysed through the head crop', asy
   });
   // The face is too small for FaceLandmarker on the 1024 px copy and is found on the head crop: it
   // passes the 120 px gate at full resolution, and is below the projection gate's 256 px.
-  const { features, ...gates } = sample;
+  const { features, body, ...gates } = sample;
+  expect(body).not.toBeNull();
   expect(gates).toEqual({
     error: null,
     poseFound: true,
