@@ -34,6 +34,9 @@ export const MEASURE = {
   regionFaceExpand: 2.5, // the person region: this face box multiple ∪ the pose landmarks' box …
   regionMargin: 0.1, // … grown by this fraction of that box's height on every side (§6)
   gapFraction: 0.01, // of heightPx: background gaps a torso span bridges
+  // × the upper arm's width: how far from an arm's axis the gap between arm and torso may start; a hole
+  // farther in is the torso's own (a strap, a speckle). On the avatar's renders it starts ≤ 1.19×.
+  armGapReach: 1.5,
   // t = 0 at the shoulder line, 1 at the hip line (mean y of 11/12, of 23/24)
   bands: { shoulder: [-0.05, 0.1], bust: [0.3, 0.4], waist: [0.55, 0.85], hip: [0.9, 1.1] },
   limbAt: { upperArm: 0.5, thigh: 1 / 3, calf: 1 / 3 }, // along shoulder→elbow, hip→knee, knee→ankle
@@ -138,10 +141,11 @@ type Arm = { side: 'left' | 'right'; shoulder: Point2; elbow: Point2; wrist: Poi
  *   midline too; then the hair is trimmed off both ends. A row whose span does not hold the midline is
  *   skipped. In the bust, waist and hip bands a side whose arm axis (shoulder→elbow, or elbow→wrist
  *   below the elbow) lies inside the span ends at the background between arm and torso, when the span
- *   bridged some (torsoEdge). Otherwise its arm touches: the side takes the other side's half-width,
- *   or, when both touch, each side ends at its axis less half the upper arm's width, and the row counts
- *   only in a band with no other row. Per band: the shoulder's widest row, the bust's median, the
- *   waist's narrowest, the hip's widest.
+ *   bridged some that starts within `armGapReach` × the upper arm's width of the axis (torsoEdge; a
+ *   hole farther in is the torso's own). Otherwise its arm touches: the side takes the other side's
+ *   half-width, or, when both touch, each side ends at its axis less half the upper arm's width, and
+ *   the row counts only in a band with no other row. Per band: the shoulder's widest row, the bust's
+ *   median, the waist's narrowest, the hip's widest.
  * - Limb width: across the limb at `limbAt` along it, walking the perpendicular over the body (no hair)
  *   both ways to the background: twice the shorter half, so a hand on the thigh or touching legs never
  *   widen it.
@@ -278,6 +282,7 @@ function torsoWidths(
   const hip = midpoint(at(POSE.hipL), at(POSE.hipR));
   const length = hip.y - shoulder.y;
   const gapPx = MEASURE.gapFraction * heightPx;
+  const armReach = MEASURE.armGapReach * upperArmWidth;
   const arms: Arm[] = [
     { side: 'left', shoulder: at(POSE.shoulderL), elbow: at(POSE.elbowL), wrist: at(POSE.wristL) },
     { side: 'right', shoulder: at(POSE.shoulderR), elbow: at(POSE.elbowR), wrist: at(POSE.wristR) },
@@ -306,7 +311,7 @@ function torsoWidths(
         const x = axisX(arm, yc);
         if (x === null || x < span.left || x > span.right + 1) continue;
         // The span bridged a gap between the torso and this arm: the side ends at the gap.
-        const edge = torsoEdge(sil, y, mid, x, span);
+        const edge = torsoEdge(sil, y, mid, x, span, armReach);
         if (edge !== null) {
           if (x < mid) left = edge;
           else right = edge;
@@ -404,8 +409,9 @@ function torsoSpan(
 /**
  * The torso's outer column on row `y` toward the arm whose axis is at `axis` (inside `span`), when
  * background separates the two: walking from the axis toward the midline, through the arm and over the
- * first gap, the first body column (hair there trimmed off, as at the span's ends). Null when the walk
- * meets the midline first: the arm touches the torso.
+ * first gap, the first body column (hair there trimmed off, as at the span's ends). The gap must start
+ * within `reach` px of the axis, about the arm's own extent: one farther in is a hole in the torso.
+ * Null when the walk meets the midline or passes `reach` first: the arm touches the torso.
  */
 function torsoEdge(
   sil: Silhouette,
@@ -413,6 +419,7 @@ function torsoEdge(
   mid: number,
   axis: number,
   span: { left: number; right: number },
+  reach: number,
 ): number | null {
   const { body, hair, width } = sil;
   const row = y * width;
@@ -421,7 +428,9 @@ function torsoEdge(
   const step = axis < mid ? 1 : -1;
   let x = Math.min(span.right, Math.max(span.left, Math.floor(axis)));
   while (x !== m && set(x)) x += step;
-  if (x === m) return null;
+  // The gap's near edge: column x's left side walking right, its right side walking left.
+  const start = step > 0 ? x - axis : axis - (x + 1);
+  if (x === m || start > reach) return null;
   while (x !== m && !set(x)) x += step;
   while (x !== m && !body[row + x]) x += step;
   return x === m ? null : x;

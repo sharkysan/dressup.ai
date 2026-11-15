@@ -56,6 +56,21 @@ function striped(fx: SynthBody, w: number, ...rows: [number, number][]): Categor
   return { ...fx.mask, data };
 }
 
+/**
+ * The figure's mask with a 3 px hole in its clothes at columns x0..x0 + 2 on rows y0..y1 − 1: a strap
+ * or an accessory the segmenter labels 'others', which is not the body.
+ */
+function holed(fx: SynthBody, x0: number, [y0, y1]: [number, number]): CategoryMask {
+  const data = fx.mask.data.slice();
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x0 + 3; x++) {
+      const i = y * fx.mask.width + x;
+      if (data[i] === MASK.clothes) data[i] = MASK.others;
+    }
+  }
+  return { ...fx.mask, data };
+}
+
 /** The rows y0..y1 − 1 that hold the band's (t from the shoulder line to the hip line), and 2 more each way. */
 function bandRows(fx: SynthBody, band: keyof typeof MEASURE.bands): [number, number] {
   const lineY = (i: number, j: number) =>
@@ -140,6 +155,30 @@ test('a row where both arms touch is left out of a band with a row where the tor
     1 / m.heightPx,
   );
 });
+
+test.each([
+  ['leftTouching', 'a strap down the torso', 'all'],
+  ['bothTouching', 'a strap down the torso', 'all'],
+  ['bothTouching', 'a speckle on one waist row', 'waist'],
+] as const)(
+  'arms %s, with %s 20 px off the midline on the subject’s left: a hole in the torso is not the gap to the arm, and the bust, waist and hip widths stay within 1 px of the clear figure’s',
+  (arms, _, where) => {
+    const clear = measure().m;
+    const fx = synthBody({ arms });
+    const [w0, w1] = bandRows(fx, 'waist');
+    const mid = Math.floor((w0 + w1) / 2);
+    const rows: [number, number] = where === 'all' ? [0, fx.mask.height] : [mid, mid + 1];
+    // The hole (x 320..322) starts 65–81 px in from the touching arm's axis: past 1.5 × the upper
+    // arm's 36 px, so it is the torso's own, and the arm touches. One such row, seen, would otherwise
+    // be the waist's narrowest, or outvote every row read from both arm axes.
+    const m = measureOf(fx, { mask: holed(fx, 320, rows) })!;
+    expect(m.features.upperArmWidth * m.heightPx).toBeCloseTo(36, 0);
+    for (const f of TORSO) {
+      expect(Math.abs(m.features[f] - clear.features[f]), f).toBeLessThanOrEqual(1 / m.heightPx);
+    }
+    expect(m.armsTouching).toEqual({ left: true, right: arms === 'bothTouching' });
+  },
+);
 
 test('hair past the shoulders leaves the shoulder and bust widths and the area unchanged', () => {
   const bald = measure().m;
