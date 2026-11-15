@@ -26,6 +26,7 @@ export const WIDTH_FEATURES = [
  * heightPx².
  */
 export const BODY_FEATURES = [...WIDTH_FEATURES, 'legLength', 'armLength', 'area'] as const;
+export type WidthFeature = (typeof WIDTH_FEATURES)[number];
 export type BodyFeature = (typeof BODY_FEATURES)[number];
 export type BodyFeatures = Record<BodyFeature, number>;
 
