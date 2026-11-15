@@ -74,3 +74,50 @@ test('a pose that fails both checks reports not_visible', () => {
   const both = withVisibility(turned(standing(), 40), POSE.kneeR, 0.1);
   expect(checkBodyGate(both)).toBe('not_visible');
 });
+
+/**
+ * The pose with its wrists' image landmarks at `left` and `right` px from the midline (x 300 of the
+ * 1000 px image; + is the subject's left, on the image's right); the world landmarks are unchanged.
+ */
+function withWrists(pose: PoseObservation, left: number, right: number): PoseObservation {
+  const x = (offset: number) => (300 + offset) / pose.imageWidth;
+  const landmarks = pose.landmarks.map((p, j) =>
+    j === POSE.wristL ? { ...p, x: x(left) } : j === POSE.wristR ? { ...p, x: x(-right) } : p,
+  );
+  return { ...pose, landmarks };
+}
+
+describe('the wrists and the hips', () => {
+  /** The hips' landmarks lie 46 px either side of the midline; the clear figure's wrists far outside. */
+  const hipOffset = () => {
+    const pose = standing();
+    return (pose.landmarks[POSE.hipL]!.x - pose.landmarks[POSE.hipR]!.x) * pose.imageWidth * 0.5;
+  };
+
+  test('both wrists between the hips (hands clasped in front, or behind the back) → not_visible', () => {
+    expect(hipOffset()).toBeCloseTo(46, 9);
+    expect(checkBodyGate(withWrists(standing(), 8, 8))).toBe('not_visible');
+    expect(checkBodyGate(withWrists(standing(), 45, -30))).toBe('not_visible');
+  });
+
+  test('one wrist between the hips → ok: the touching arm’s rule mirrors the other side', () => {
+    expect(checkBodyGate(withWrists(standing(), 8, 130))).toBe('ok');
+    expect(checkBodyGate(withWrists(standing(), 130, 8))).toBe('ok');
+  });
+
+  test('both wrists outside the hips → ok, and a wrist on a hip’s line is not between them', () => {
+    const pose = standing();
+    for (const i of [POSE.wristL, POSE.wristR]) {
+      expect(Math.abs(pose.landmarks[i]!.x * pose.imageWidth - 300)).toBeGreaterThan(hipOffset());
+    }
+    expect(checkBodyGate(pose)).toBe('ok');
+    expect(checkBodyGate(withWrists(standing(), 60, 60))).toBe('ok');
+    expect(checkBodyGate(withWrists(standing(), 46, 46))).toBe('ok'); // strictly between
+  });
+
+  test('the wrists are checked after the visibility and the turn', () => {
+    const inside = withWrists(standing(), 8, 8);
+    expect(checkBodyGate(turned(inside, 30))).toBe('turned');
+    expect(checkBodyGate(withVisibility(inside, POSE.ankleL, 0.2))).toBe('not_visible');
+  });
+});

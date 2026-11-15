@@ -9,7 +9,7 @@ import {
   WIDTH_FEATURES,
   type BodyFeature,
 } from '../../src/analysis/body/measure';
-import { POSE } from '../../src/analysis/pose';
+import { POSE, posePixels } from '../../src/analysis/pose';
 import {
   MASK,
   type CategoryMask,
@@ -280,6 +280,68 @@ test.each(CLOSE_HOLES)(
     // of its own arm's: the agreement can't tell the hole from the gap. But the walk from the arm's
     // axis passes from its skin into the torso's clothes before the hole: the arm touches the torso.
     expectHoleIgnored(c);
+  },
+);
+
+/** Each limb width's segment on the subject's left, from the joint its `limbAt` is measured from. */
+const LEFT_LIMBS = {
+  upperArmWidth: { limb: 'upperArm', from: POSE.shoulderL, to: POSE.elbowL },
+  thighWidth: { limb: 'thigh', from: POSE.hipL, to: POSE.kneeL },
+  calfWidth: { limb: 'calf', from: POSE.kneeL, to: POSE.ankleL },
+} as const;
+
+/**
+ * The figure's mask with a 5 × 5 px patch of `category` centred on the point the left limb's width is
+ * walked from (`limbAt` along its segment): hair over it, or an accessory the segmenter labels 'others'.
+ */
+function patchedLimb(
+  fx: SynthBody,
+  feature: keyof typeof LEFT_LIMBS,
+  category: number,
+): CategoryMask {
+  const { limb, from, to } = LEFT_LIMBS[feature];
+  const at = posePixels(fx.pose);
+  const along = MEASURE.limbAt[limb];
+  const cx = Math.floor(at[from]!.x + along * (at[to]!.x - at[from]!.x));
+  const cy = Math.floor(at[from]!.y + along * (at[to]!.y - at[from]!.y));
+  const data = fx.mask.data.slice();
+  for (let y = cy - 2; y <= cy + 2; y++) {
+    for (let x = cx - 2; x <= cx + 2; x++) data[y * fx.mask.width + x] = category;
+  }
+  return { ...fx.mask, data };
+}
+
+describe.each(Object.keys(LEFT_LIMBS) as (keyof typeof LEFT_LIMBS)[])(
+  'a side of %s that measures 0',
+  (feature) => {
+    test.each([
+      ['hair', MASK.hair],
+      ["an accessory ('others')", MASK.others],
+    ] as const)(
+      'under a patch of %s is left out: the width within 1 px of the clear figure’s, and with both arms touching the bust, waist and hip widths too',
+      (_, category) => {
+        const clear = measure().m;
+        for (const arms of ['clear', 'bothTouching'] as const) {
+          const fx = synthBody({ arms });
+          const m = measureOf(fx, { mask: patchedLimb(fx, feature, category) })!;
+          // The patched side measured 0: its line across the limb has no length.
+          const sides = m.lines.filter((l) => l.feature === feature);
+          expect(sides.filter(({ a, b }) => a.x === b.x && a.y === b.y)).toHaveLength(1);
+          expect(
+            Math.abs(m.features[feature] - clear.features[feature]),
+            `arms ${arms}: ${feature}`,
+          ).toBeLessThanOrEqual(1 / m.heightPx);
+          if (arms === 'clear') continue;
+          // The touching arms' rules read the torso's sides with the upper arm's width.
+          for (const f of TORSO) {
+            expect(
+              Math.abs(m.features[f] - clear.features[f]),
+              `arms ${arms}: ${f}`,
+            ).toBeLessThanOrEqual(1 / m.heightPx);
+          }
+        }
+      },
+    );
   },
 );
 

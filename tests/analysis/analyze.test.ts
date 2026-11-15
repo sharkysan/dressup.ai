@@ -370,6 +370,34 @@ describe('the body gate and the body measurement', () => {
     expect(result.likenessGate).toBe('ok');
   });
 
+  test('both wrists between the hips (hands clasped in front) → not_visible: the default body and no measurement', async () => {
+    const at = posePixels(figure.pose);
+    const midX = (at[POSE.hipL]!.x + at[POSE.hipR]!.x) / 2;
+    const landmarks = figure.pose.landmarks.map((p, i) =>
+      i === POSE.wristL || i === POSE.wristR
+        ? { ...p, x: (midX + (i === POSE.wristL ? 8 : -8)) / figure.mask.width }
+        : p,
+    );
+    const pose: PoseObservation = { ...figure.pose, landmarks };
+    // Every gated landmark is visible and the shoulders face the camera, and measureBody would measure
+    // a body with every ratio > 0: the wrists alone fail the gate.
+    const measured = measureBody({
+      pose,
+      mask: figure.mask,
+      faceBox: faceBox(toPixels(person.face)),
+      headTopY: headTopY(person.face, headTopFactor(CORR)),
+      width: person.image.width,
+      height: person.image.height,
+    });
+    expect(Object.values(measured!.features).every((v) => Number.isFinite(v) && v > 0)).toBe(true);
+
+    const result = await analyse(pose, 180);
+    expect(result.pose).toBe(pose);
+    expect(result.body).toEqual({ gate: 'not_visible', measurement: null });
+    expect(result.params.body).toEqual({ ...defaultParams.body, gender: 0.7, heightCm: 180 });
+    expect(result.likenessGate).toBe('ok');
+  });
+
   test("gate 'not_visible': no measurement, and the photo face is still built", async () => {
     const landmarks = figure.pose.landmarks.map((p, i) =>
       i === POSE.ankleR ? { ...p, visibility: 0.3 } : p,

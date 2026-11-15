@@ -164,7 +164,8 @@ type Arm = { side: 'left' | 'right'; shoulder: Point2; elbow: Point2; wrist: Poi
  *   shoulder's widest row, the bust's median, the waist's narrowest, the hip's widest.
  * - Limb width: across the limb at `limbAt` along it, walking the perpendicular over the body (no hair)
  *   both ways to the background: twice the shorter half, so a hand on the thigh or touching legs never
- *   widen it.
+ *   widen it. A side whose point is not the body (hair or an accessory over it) measures 0 and is left
+ *   out of the mean; the torso's arm rules use the same upper-arm width.
  * - Lengths: hip→knee→ankle and shoulder→elbow→wrist. Area: the body's pixels from the shoulder line to
  *   the ankle line.
  * - Widths and lengths ÷ heightPx; the area ÷ heightPx².
@@ -193,8 +194,11 @@ export function measureBody(input: {
 
   const limb = (feature: BodyFeature, segments: [number, number][], along: number) => {
     const measured = segments.map(([a, b]) => limbWidth(sil, at(a), at(b), along));
+    // A side whose point isn't the body's (hair or an accessory over it) measures 0 and is left out;
+    // with neither side measured the width is 0, which analyzePhoto reports as not visible.
+    const widths = measured.map((m) => m.width).filter((w) => w > 0);
     return {
-      width: mean(measured.map((m) => m.width)),
+      width: widths.length > 0 ? mean(widths) : 0,
       lines: measured.map(({ a, b }) => ({ feature, a, b })),
     };
   };
