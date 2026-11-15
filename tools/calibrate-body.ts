@@ -4,9 +4,12 @@
  * and measurement as a photo.
  *   tsx tools/calibrate-body.ts [--train 600] [--holdout 100] [--seed 20261115] [--pages 4] [--url http://…]
  * Without --url it serves the app with Vite's dev server on a free port, closed at the end. The training
- * bodies come from the seed, the held-out ones from seed + 1. It writes src/analysis/body-calibration.json
- * and tests/fixtures/body-holdout.json, prints the held-out error per morph at both degrees, and exits 1
- * when a kept morph is off by more than 0.15 (after writing, so the numbers can be inspected).
+ * bodies come from the seed, the held-out ones from seed + 1. After fitting both degrees it renders each
+ * held-out estimate at both and measures it again; the degree whose worst outline ratio (outlineError)
+ * is lower is kept. It writes src/analysis/body-calibration.json and tests/fixtures/body-holdout.json,
+ * prints the held-out error per morph and per ratio at both degrees, and exits 1 (after writing, so the
+ * numbers can be inspected) when a held-out estimate's re-render fails or a kept ratio's outline error
+ * is over OUTLINE_TOLERANCE (spec §15).
  */
 import { chromium, type Browser, type Page } from '@playwright/test';
 import fs from 'node:fs';
@@ -21,10 +24,16 @@ import {
   type BodyCalibration,
   type CalibratedMorph,
 } from '../src/analysis/body/estimate';
-import { BODY_FEATURES, WIDTH_FEATURES, type BodyFeatures } from '../src/analysis/body/measure';
+import {
+  BODY_FEATURES,
+  WIDTH_FEATURES,
+  type BodyFeature,
+  type BodyFeatures,
+} from '../src/analysis/body/measure';
 import type { AvatarParams } from '../src/catalog/params';
 import type { CalibrationSample } from '../src/ui/dev/calibrationHook';
 import { writeAtomically } from './base/writeAtomically';
+import { OUTLINE_TOLERANCE, outlineError, spread } from './calibration/outline';
 import { chooseLambda, fitRidge, standardize } from './calibration/ridge';
 import { sampleBodies } from './calibration/sample';
 import { cli } from './cli';
@@ -32,16 +41,33 @@ import { SWIFTSHADER_ARGS } from './swiftshader';
 
 const CALIBRATION_FILE = path.resolve('src/analysis/body-calibration.json');
 const HOLDOUT_FILE = path.resolve('tests/fixtures/body-holdout.json');
-/** Spec §15: every recovered morph within ±0.15 of the truth on the held-out renders. */
-const TOLERANCE = 0.15;
 /** The share of samples that may be dropped (an analysis error, or a body gate other than 'ok'). */
 const MAX_DROPPED = 0.02;
 const READY_TIMEOUT_MS = 120_000;
 
 type Input = { body: AvatarParams['body']; skin: string };
-type Measured = { body: AvatarParams['body']; features: BodyFeatures };
+type Measured = Input & { features: BodyFeatures };
 type Score = { maxAbsError: Record<CalibratedMorph, number>; rms: Record<CalibratedMorph, number> };
-type Fit = { cal: BodyCalibration; lambdas: Record<CalibratedMorph, number>; score: Score };
+type Outline = {
+  /** outlineError over the held-out estimates that re-rendered. */
+  error: Record<BodyFeature, number>;
+  /** |re-render − original| ÷ original, its mean and maximum. */
+  meanRel: Record<BodyFeature, number>;
+  maxRel: Record<BodyFeature, number>;
+};
+type Fit = {
+  cal: BodyCalibration;
+  lambdas: Record<CalibratedMorph, number>;
+  score: Score;
+  /** Per held-out sample: the clamped estimate, and the features of its render (null: it failed). */
+  estimates: Record<CalibratedMorph, number>[];
+  reprojected: (BodyFeatures | null)[];
+  outline: Outline;
+};
+type Pool = {
+  collect: (inputs: Input[], what: string) => Promise<(CalibrationSample | string)[]>;
+  close: () => Promise<void>;
+};
 
 async function main() {
   const args = cli(['train', 'holdout', 'seed', 'pages', 'url'] as const, [] as const, {
@@ -59,59 +85,92 @@ async function main() {
   const inputs = [...sampleBodies(train, seed), ...sampleBodies(holdout, seed + 1)];
   const server = args.url ? null : await serve();
   const url = args.url ?? server!.resolvedUrls!.local[0]!.replace(/\/$/, '');
-  let samples: (CalibrationSample | string)[];
+  const pool = await openPool(url, pages);
+  let trainSet: Measured[];
+  let holdoutSet: Measured[];
+  let fits: Fit[];
   try {
-    samples = await collect(url, inputs, pages);
+    const samples = await pool.collect(inputs, 'bodies');
+    const kept = samples.map((s, i) => {
+      const features = featuresOf(s);
+      return features ? { ...inputs[i]!, features } : null;
+    });
+    reportDropped(samples, kept);
+    trainSet = kept.slice(0, train).filter((s) => s !== null);
+    holdoutSet = kept.slice(train).filter((s) => s !== null);
+
+    const setup = {
+      train,
+      holdout,
+      seed,
+      armDownDeg: CALIBRATION.armDownDeg,
+      render: [CALIBRATION.render.width, CALIBRATION.render.height] as [number, number],
+    };
+    const fitted = ([1, 2] as const).map((degree) => {
+      const f = fit(trainSet, degree, setup);
+      const estimates = holdoutSet.map((s) => estimateMorphs(s.features, s.body.gender, f.cal));
+      return { ...f, score: score(estimates, holdoutSet), estimates };
+    });
+    // Each held-out estimate rendered as the original was: its gender and skin, the calibration height.
+    const rendered = await pool.collect(
+      fitted.flatMap((f) =>
+        holdoutSet.map((s, i) => ({
+          body: { heightCm: CALIBRATION.heightCm, gender: s.body.gender, ...f.estimates[i]! },
+          skin: s.skin,
+        })),
+      ),
+      'held-out estimates',
+    );
+    fits = fitted.map((f, k) => {
+      const reprojected = rendered
+        .slice(k * holdoutSet.length, (k + 1) * holdoutSet.length)
+        .map(featuresOf);
+      return { ...f, reprojected, outline: outline(holdoutSet, reprojected) };
+    });
   } finally {
+    await pool.close();
     await server?.close();
   }
 
-  const kept: (Measured | null)[] = samples.map((s, i) =>
-    typeof s !== 'string' && s.error === null && s.bodyGate === 'ok' && s.features
-      ? { body: inputs[i]!.body, features: s.features }
-      : null,
-  );
-  reportDropped(samples, kept);
-  const trainSet = kept.slice(0, train).filter((s) => s !== null);
-  const holdoutSet = kept.slice(train).filter((s) => s !== null);
-
-  const setup = {
-    train,
-    holdout,
-    seed,
-    armDownDeg: CALIBRATION.armDownDeg,
-    render: [CALIBRATION.render.width, CALIBRATION.render.height] as [number, number],
-  };
-  const fits = ([1, 2] as const).map((degree) => {
-    const fitted = fit(trainSet, degree, setup);
-    return { ...fitted, score: score(fitted.cal, holdoutSet) };
-  });
-  const worst = (f: Fit) => Math.max(...CALIBRATED_MORPHS.map((m) => f.score.maxAbsError[m]));
+  const worst = (f: Fit) => Math.max(...BODY_FEATURES.map((r) => f.outline.error[r]));
   const best = worst(fits[1]!) < worst(fits[0]!) ? fits[1]! : fits[0]!;
   const calibration: BodyCalibration = {
     ...best.cal,
-    holdout: { n: holdoutSet.length, maxAbsError: best.score.maxAbsError },
+    holdout: {
+      n: holdoutSet.length,
+      outlineError: best.outline.error,
+      maxAbsError: best.score.maxAbsError,
+    },
   };
 
   await writeJson(CALIBRATION_FILE, calibration);
   await writeJson(HOLDOUT_FILE, {
-    samples: holdoutSet.map((s) => ({
+    samples: holdoutSet.map((s, i) => ({
       gender: s.body.gender,
       features: s.features,
       truth: perMorph((m) => s.body[m]),
+      estimate: best.estimates[i],
+      reprojected: best.reprojected[i],
     })),
   });
   console.log(
     `\nKept ${trainSet.length}/${train} training and ${holdoutSet.length}/${holdout} held-out samples.`,
   );
-  for (const f of fits) printTable(f, f === best, worst(f));
-  printWorst(best.cal, holdoutSet);
+  for (const f of fits) printTables(f, f === best, worst(f));
+  printWorst(best, holdoutSet);
   console.log(
     `\nWrote ${path.relative('.', CALIBRATION_FILE)} and ${path.relative('.', HOLDOUT_FILE)}.`,
   );
-  if (worst(best) > TOLERANCE) {
+  const failed = fits.flatMap((f) =>
+    f.reprojected.flatMap((r, i) => (r ? [] : [`#${i} at degree ${f.cal.degree}`])),
+  );
+  if (failed.length > 0) {
+    console.error(`These held-out estimates' re-renders failed: ${failed.join(', ')}.`);
+    process.exitCode = 1;
+  }
+  if (worst(best) > OUTLINE_TOLERANCE) {
     console.error(
-      `A kept morph's held-out error is over ${TOLERANCE}: the calibration misses the target (spec §15).`,
+      `A kept ratio's outline error is over ${OUTLINE_TOLERANCE} of its spread: the calibration misses the target (spec §15).`,
     );
     process.exitCode = 1;
   }
@@ -121,6 +180,11 @@ function count(value: string | undefined, name: string): number {
   const n = Number(value);
   if (!Number.isInteger(n) || n < 1) throw new Error(`--${name} must be a positive integer`);
   return n;
+}
+
+/** A sample's features when it measured a body: no analysis error, the body gate 'ok'. */
+function featuresOf(s: CalibrationSample | string): BodyFeatures | null {
+  return typeof s !== 'string' && s.error === null && s.bodyGate === 'ok' ? s.features : null;
 }
 
 /** The app on Vite's dev server, on a free port, without HMR (a file edited mid-run never reloads a page). */
@@ -137,41 +201,38 @@ async function serve(): Promise<ViteDevServer> {
 }
 
 /**
- * Every input's sample, in order, shared out over `pages` pages: a CalibrationSample, or the message of
- * the error that broke the sample twice (the page is reopened before the second try).
+ * Up to `size` pages of the app in one browser, opened on first use and kept for the next collection.
+ * `collect` gives every input's sample, in order, shared out over the pages: a CalibrationSample, or the
+ * message of the error that broke the sample twice (the page is reopened before the second try).
  */
-async function collect(
-  url: string,
-  inputs: Input[],
-  pages: number,
-): Promise<(CalibrationSample | string)[]> {
+async function openPool(url: string, size: number): Promise<Pool> {
   const browser = await chromium.launch({ args: SWIFTSHADER_ARGS });
-  const out: (CalibrationSample | string)[] = new Array(inputs.length);
-  const started = Date.now();
-  let next = 0;
-  let done = 0;
-  const worker = async () => {
-    let page = await openPage(browser, url);
-    for (let i = next++; i < inputs.length; i = next++) {
-      try {
-        out[i] = await sampleOn(page, inputs[i]!);
-      } catch (error) {
-        console.warn(`sample ${i}: ${message(error)}; reopening its page`);
-        await page.close().catch(() => undefined);
-        page = await openPage(browser, url);
-        out[i] = await sampleOn(page, inputs[i]!).catch(message);
+  const pages: (Page | undefined)[] = new Array(size);
+  const collect = async (inputs: Input[], what: string) => {
+    const out: (CalibrationSample | string)[] = new Array(inputs.length);
+    const started = Date.now();
+    let next = 0;
+    let done = 0;
+    const worker = async (w: number) => {
+      for (let i = next++; i < inputs.length; i = next++) {
+        let page = (pages[w] ??= await openPage(browser, url));
+        try {
+          out[i] = await sampleOn(page, inputs[i]!);
+        } catch (error) {
+          console.warn(`sample ${i}: ${message(error)}; reopening its page`);
+          await page.close().catch(() => undefined);
+          page = pages[w] = await openPage(browser, url);
+          out[i] = await sampleOn(page, inputs[i]!).catch(message);
+        }
+        done++;
+        if (done % 20 === 0 || done === inputs.length) progress(done, inputs.length, started);
       }
-      done++;
-      if (done % 20 === 0 || done === inputs.length) progress(done, inputs.length, started);
-    }
+    };
+    console.log(`Rendering ${inputs.length} ${what} on ${size} pages at ${url}`);
+    await Promise.all(Array.from({ length: Math.min(size, inputs.length) }, (_, w) => worker(w)));
+    return out;
   };
-  try {
-    console.log(`Rendering ${inputs.length} bodies on ${pages} pages at ${url}`);
-    await Promise.all(Array.from({ length: Math.min(pages, inputs.length) }, worker));
-  } finally {
-    await browser.close();
-  }
-  return out;
+  return { collect, close: () => browser.close() };
 }
 
 async function openPage(browser: Browser, url: string): Promise<Page> {
@@ -244,7 +305,8 @@ function fit(
     mean: new Array<number>(inputs).fill(0),
     scale: new Array<number>(inputs).fill(1),
     coefficients: perMorph(() => []),
-    holdout: { n: 0, maxAbsError: perMorph(() => 0) }, // scored on the held-out set by main
+    // Scored on the held-out set by main.
+    holdout: { n: 0, outlineError: perRatio(() => 0), maxAbsError: perMorph(() => 0) },
     setup,
   };
   // At degree 1 with mean 0 and scale 1, designRow is the raw inputs: the widths net of the allowance,
@@ -258,52 +320,78 @@ function fit(
   return { cal: { ...cal, coefficients }, lambdas };
 }
 
-/** The held-out error per morph of the clamped estimate: its maximum and its RMS. */
-function score(cal: BodyCalibration, holdout: Measured[]): Score {
-  const errors = holdout.map((s) => {
-    const estimate = estimateMorphs(s.features, s.body.gender, cal);
-    return perMorph((m) => Math.abs(estimate[m] - s.body[m]));
-  });
+/** The held-out error per morph of the clamped estimates: its maximum and its RMS. */
+function score(estimates: Record<CalibratedMorph, number>[], holdout: Measured[]): Score {
+  const errors = holdout.map((s, i) => perMorph((m) => Math.abs(estimates[i]![m] - s.body[m])));
   return {
     maxAbsError: perMorph((m) => Math.max(0, ...errors.map((e) => e[m]))),
     rms: perMorph((m) => Math.sqrt(errors.reduce((sum, e) => sum + e[m] ** 2, 0) / errors.length)),
   };
 }
 
+/** The outline of the held-out estimates that re-rendered, against their originals. */
+function outline(holdout: Measured[], reprojected: (BodyFeatures | null)[]): Outline {
+  const pairs = holdout.flatMap((s, i) => {
+    const r = reprojected[i];
+    return r ? [{ features: s.features, reprojected: r }] : [];
+  });
+  const rel = (f: BodyFeature) =>
+    pairs.map((p) => Math.abs(p.reprojected[f] - p.features[f]) / p.features[f]);
+  return {
+    error: outlineError(pairs),
+    meanRel: perRatio((f) => rel(f).reduce((a, b) => a + b, 0) / pairs.length),
+    maxRel: perRatio((f) => Math.max(...rel(f))),
+  };
+}
+
 const perMorph = <T>(value: (m: CalibratedMorph) => T) =>
   Object.fromEntries(CALIBRATED_MORPHS.map((m) => [m, value(m)])) as Record<CalibratedMorph, T>;
+const perRatio = <T>(value: (f: BodyFeature) => T) =>
+  Object.fromEntries(BODY_FEATURES.map((f) => [f, value(f)])) as Record<BodyFeature, T>;
 
-function printTable(f: Fit, kept: boolean, worst: number) {
+function printTables(f: Fit, kept: boolean, worst: number) {
+  const morphs = Math.max(...CALIBRATED_MORPHS.map((m) => f.score.maxAbsError[m]));
   console.log(
-    `\nDegree ${f.cal.degree}${kept ? ' (kept)' : ''}: held-out worst ${worst.toFixed(3)}`,
+    `\nDegree ${f.cal.degree}${kept ? ' (kept)' : ''}: held-out worst outline ratio ${worst.toFixed(3)}, worst morph ${morphs.toFixed(3)}`,
   );
   console.log(
     `  ${'morph'.padEnd(10)} ${'lambda'.padStart(8)} ${'max'.padStart(7)} ${'rms'.padStart(7)}`,
   );
   for (const m of CALIBRATED_MORPHS) {
-    const max = f.score.maxAbsError[m];
     console.log(
-      `  ${m.padEnd(10)} ${f.lambdas[m].toExponential(1).padStart(8)} ${max.toFixed(3).padStart(7)} ${f.score.rms[m].toFixed(3).padStart(7)}${max > TOLERANCE ? '  over' : ''}`,
+      `  ${m.padEnd(10)} ${f.lambdas[m].toExponential(1).padStart(8)} ${f.score.maxAbsError[m].toFixed(3).padStart(7)} ${f.score.rms[m].toFixed(3).padStart(7)}`,
+    );
+  }
+  console.log(
+    `  ${'ratio'.padEnd(13)} ${'score'.padStart(7)} ${'mean rel'.padStart(9)} ${'max rel'.padStart(8)}`,
+  );
+  for (const r of BODY_FEATURES) {
+    const error = f.outline.error[r];
+    const pct = (v: number) => `${(100 * v).toFixed(1)} %`;
+    console.log(
+      `  ${r.padEnd(13)} ${error.toFixed(3).padStart(7)} ${pct(f.outline.meanRel[r]).padStart(9)} ${pct(f.outline.maxRel[r]).padStart(8)}${error > OUTLINE_TOLERANCE ? '  over' : ''}`,
     );
   }
 }
 
-/** The five held-out samples with the largest error on any morph, under the kept fit. */
-function printWorst(cal: BodyCalibration, holdout: Measured[]) {
-  const rows = holdout.map((s, i) => {
-    const estimate = estimateMorphs(s.features, s.body.gender, cal);
-    const errors = CALIBRATED_MORPHS.map((m) => ({ m, error: Math.abs(estimate[m] - s.body[m]) }));
-    const worst = errors.reduce((a, b) => (b.error > a.error ? b : a));
-    return { i, s, estimate, worst };
+/** The five held-out samples whose re-render is furthest off on a ratio, in units of its spread. */
+function printWorst(f: Fit, holdout: Measured[]) {
+  const sd = spread(holdout.map((s) => s.features));
+  const rows = holdout.flatMap((s, i) => {
+    const r = f.reprojected[i];
+    if (!r) return [];
+    const errors = BODY_FEATURES.map((ratio) => ({
+      ratio,
+      error: Math.abs(r[ratio] - s.features[ratio]) / sd[ratio],
+      rel: Math.abs(r[ratio] - s.features[ratio]) / s.features[ratio],
+    }));
+    return [{ i, worst: errors.reduce((a, b) => (b.error > a.error ? b : a)) }];
   });
   rows.sort((a, b) => b.worst.error - a.worst.error);
-  console.log('\nWorst held-out samples (kept degree): truth → estimate');
-  for (const { i, s, estimate, worst } of rows.slice(0, 5)) {
-    const morphs = CALIBRATED_MORPHS.map(
-      (m) => `${m} ${s.body[m].toFixed(2)}→${estimate[m].toFixed(2)}`,
-    ).join(', ');
+  console.log('\nWorst held-out outlines (kept degree):');
+  for (const { i, worst } of rows.slice(0, 5)) {
     console.log(
-      `  #${i}: ${worst.m} off by ${worst.error.toFixed(3)}; gender ${s.body.gender.toFixed(2)}; ${morphs}`,
+      `  #${i}: ${worst.ratio} off by ${worst.error.toFixed(2)} × its spread (${(100 * worst.rel).toFixed(1)} %)`,
     );
   }
 }

@@ -45,6 +45,7 @@
    - Gender is never inferred, but its slider changes the build. The estimate therefore takes it as given: the analysis passes the current gender, and M6's Reveal can re-estimate when it changes.
 4. **The clothing allowance is 0 for every width** until M3c tunes it on the test-photo set, which doesn't exist yet. It is in the calibration file, so tuning it changes no code.
 5. **The head top comes from the face landmarks, not the silhouette.** It is landmark 10 raised by `headTopFactor` × the landmark 10→152 distance. That factor is the base's proportion, read from `correspondence.json` (0.412 today). Hair volume therefore never changes the measured height. This holds on renders and photos alike.
+6. **The body target is the outline (Task 4b; the owner's decision, 2026-11-15).** It replaces "every morph within ±0.15", which the full calibration missed on every morph (bust worst, at 1.01): a front view cannot separate the morphs. Each held-out estimate is rendered and measured again, and every ratio's RMS error over the held-out bodies must be at most half that ratio's spread across them (spec §15). The degree whose worst ratio is lower is kept.
 
 ## Global Constraints
 
@@ -78,7 +79,7 @@
 - **Model.** `pose_landmarker_full.task` from `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task` (9.4 MB, Apache-2.0).
   - It is self-hosted at `/models/` and loaded with the other two.
   - The GPU→CPU fallback works as today.
-- **Accuracy (§15).** On the held-out renders, every recovered morph (after clamping) is within ±0.15 of the truth, measured as the maximum absolute error per morph.
+- **Accuracy (§15).** The outline target of ruling 6.
 
 ## Review Focus
 
@@ -416,7 +417,7 @@ git commit -m "feat(analysis): body estimator (calibration schema, design rows, 
 
 `bodyCalibration.test.ts`:
 - `body-calibration.json` parses.
-- For every sample in `body-holdout.json` (`{ samples: { gender, features, truth }[] }`), every morph of `estimateMorphs` is within 0.15 of `truth`.
+- The held-out accuracy test: the outline target of ruling 6 (Task 4b).
 - The recomputed per-morph maximum errors equal `holdout.maxAbsError` within 1e-9.
 
 `analyze.test.ts`: with the gate `'ok'`, `params.body`'s morphs equal `estimateMorphs` on the measured features.
@@ -435,14 +436,14 @@ The CLI:
 4. Fits degree 1 and degree 2, standardising on the training set and choosing λ per morph with `chooseLambda`.
 5. Scores both degrees on the held-out set by the clamped maximum absolute error per morph, and keeps the one whose worst morph is lower.
 6. Writes both files with `writeAtomically`, then prints the per-morph table for both degrees.
-7. Exits 1 if any kept morph's error is over 0.15. It writes the files first, so the numbers can be inspected.
+7. Exits 1 if the kept degree misses the target of ruling 6. It writes the files first, so the numbers can be inspected.
 
 - [ ] **Step 4: Run the calibration**
 
 Run: `npm run calibrate:body` (expect 20–40 min).
-Expected: exit 0 and a table with every morph ≤ 0.15.
+Expected: exit 0 (ruling 6).
 
-**If any morph is over 0.15 at both degrees:**
+**If the kept degree misses the target of ruling 6:**
 - Do not loosen the test, change the bands, or drop a morph.
 - Report BLOCKED with both tables and the five worst held-out samples. Which body measurements are reachable from a front view is the owner's call.
 
@@ -457,7 +458,7 @@ Add to `e2e/body.spec.ts`, for two bodies through `sample()`:
 - all morphs 0 with gender 0;
 - `{ gender: 0.2, weight: 0.5, muscle: -0.3, shoulders: 0.4, bust: -0.4, waist: 0.3, hips: -0.5, legLength: 0.4, armLength: -0.3 }`.
 
-Expect `bodyGate: 'ok'`, every morph of `body` within 0.15 of what was set, and `body.heightCm === 165`.
+Expect `bodyGate: 'ok'`, and the outline of ruling 6 (Task 4b: `body`, rendered again, measures as the original render).
 
 Run: `npx playwright test e2e/body.spec.ts`
 Expected: PASS.

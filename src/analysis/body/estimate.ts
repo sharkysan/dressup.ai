@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import { BODY_MORPHS } from '../../catalog/params';
-import { BODY_FEATURES, WIDTH_FEATURES, type BodyFeatures, type WidthFeature } from './measure';
+import {
+  BODY_FEATURES,
+  WIDTH_FEATURES,
+  type BodyFeature,
+  type BodyFeatures,
+  type WidthFeature,
+} from './measure';
 
 /** The morphs the photo determines: every body morph but gender, which is never inferred. */
 export const CALIBRATED_MORPHS = BODY_MORPHS.filter((m) => m !== 'gender');
@@ -44,6 +50,14 @@ export const bodyCalibrationSchema = z
     ),
     holdout: z.object({
       n: z.number().int().nonnegative(),
+      /** Per ratio: the re-rendered estimates' RMS error ÷ the ratio's spread (spec §15). */
+      outlineError: z.object(
+        Object.fromEntries(BODY_FEATURES.map((f) => [f, z.number().nonnegative()])) as Record<
+          BodyFeature,
+          z.ZodNumber
+        >,
+      ),
+      /** Per morph, for information: the morphs are not a target (spec §15). */
       maxAbsError: z.object(
         Object.fromEntries(CALIBRATED_MORPHS.map((m) => [m, z.number().nonnegative()])) as Record<
           CalibratedMorph,

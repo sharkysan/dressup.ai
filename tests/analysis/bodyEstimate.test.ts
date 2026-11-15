@@ -37,6 +37,7 @@ function calibration(degree: 1 | 2, intercept = 0): BodyCalibration {
     holdout: {
       n: 1,
       maxAbsError: Object.fromEntries(CALIBRATED_MORPHS.map((m) => [m, 0])) as never,
+      outlineError: Object.fromEntries(BODY_FEATURES.map((f) => [f, 0.2])) as never,
     },
     setup: { train: 1, holdout: 1, seed: 1, armDownDeg: 10, render: [512, 512] },
   };
@@ -104,6 +105,14 @@ describe('bodyCalibrationSchema', () => {
     const cal = calibration(1);
     cal.coefficients.weight = cal.coefficients.weight.slice(1);
     expect(bodyCalibrationSchema.safeParse(cal).success).toBe(false);
+  });
+
+  it('rejects a held-out outline error that misses a ratio, is negative or is not finite', () => {
+    for (const area of [undefined, -0.1, Infinity]) {
+      const cal = calibration(1);
+      cal.holdout.outlineError = { ...cal.holdout.outlineError, area: area as number };
+      expect(bodyCalibrationSchema.safeParse(cal).success, String(area)).toBe(false);
+    }
   });
 
   it('rejects a negative allowance and a non-positive scale', () => {
