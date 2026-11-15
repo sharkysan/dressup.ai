@@ -3,6 +3,7 @@ import {
   FilesetResolver,
   ImageSegmenter,
   PoseLandmarker,
+  type PoseLandmarkerResult,
 } from '@mediapipe/tasks-vision';
 import { MODEL_FILES } from './modelFiles';
 import type { CategoryMask, FaceObservation, PoseObservation } from './types';
@@ -145,15 +146,31 @@ export function detectPoses(canvas: HTMLCanvasElement): PoseObservation[] {
   if (!poseLandmarker) throw new Error('models not loaded');
   const result = poseLandmarker.detect(canvas);
   try {
-    return result.landmarks.map((landmarks, i) => ({
-      landmarks: landmarks.map((p) => ({ x: p.x, y: p.y, z: p.z, visibility: p.visibility })),
-      world: (result.worldLandmarks[i] ?? []).map((p) => ({ x: p.x, y: p.y, z: p.z })),
-      imageWidth: canvas.width,
-      imageHeight: canvas.height,
-    }));
+    return toPoseObservations(result, canvas.width, canvas.height);
   } finally {
     result.close();
   }
+}
+
+/**
+ * PoseLandmarker's poses on an image of `width` × `height`, in its order. A pose without a world
+ * landmark for each of its landmarks is left out: the body gate reads the world shoulders.
+ */
+export function toPoseObservations(
+  result: Pick<PoseLandmarkerResult, 'landmarks' | 'worldLandmarks'>,
+  width: number,
+  height: number,
+): PoseObservation[] {
+  return result.landmarks.flatMap((landmarks, i) => {
+    const world = result.worldLandmarks[i];
+    if (world?.length !== landmarks.length) return [];
+    return {
+      landmarks: landmarks.map((p) => ({ x: p.x, y: p.y, z: p.z, visibility: p.visibility })),
+      world: world.map((p) => ({ x: p.x, y: p.y, z: p.z })),
+      imageWidth: width,
+      imageHeight: height,
+    };
+  });
 }
 
 /** Category mask (0..5) at the segmenter's working resolution. */

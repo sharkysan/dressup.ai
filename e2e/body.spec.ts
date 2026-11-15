@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { CALIBRATION } from '../src/analysis/body/calibrationSetup';
+import { BODY_FEATURES } from '../src/analysis/body/measure';
 import { defaultParams } from '../src/catalog/params';
 import { openAvatar } from './helpers/avatar';
 import { skipWithoutModels } from './helpers/models';
@@ -16,5 +17,17 @@ test('a full-length render of the avatar is analysed through the head crop', asy
   });
   // The face is too small for FaceLandmarker on the 1024 px copy and is found on the head crop: it
   // passes the 120 px gate at full resolution, and is below the projection gate's 256 px.
-  expect(sample).toEqual({ error: null, poseFound: true, likenessGate: 'too_small' });
+  const { features, ...gates } = sample;
+  expect(gates).toEqual({
+    error: null,
+    poseFound: true,
+    likenessGate: 'too_small',
+    bodyGate: 'ok',
+  });
+  // The body gate passes, and the body is measured.
+  expect(features).not.toBeNull();
+  for (const f of BODY_FEATURES) {
+    expect(Number.isFinite(features![f]), f).toBe(true);
+    expect(features![f], f).toBeGreaterThan(0);
+  }
 });

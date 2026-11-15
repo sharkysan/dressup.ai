@@ -5,6 +5,8 @@ import {
   type AnalyzeResult,
 } from '../../analysis/analyze';
 import { CALIBRATION } from '../../analysis/body/calibrationSetup';
+import type { BodyGate } from '../../analysis/body/gate';
+import type { BodyFeatures } from '../../analysis/body/measure';
 import { getAvatarVrm } from '../../avatar/avatarHandle';
 import { setArmsDown } from '../../avatar/calibrationPose';
 import type { AvatarParams } from '../../catalog/params';
@@ -18,6 +20,10 @@ export type CalibrationSample = {
   error: AnalysisErrorCode | null;
   poseFound: boolean;
   likenessGate: AnalyzeResult['likenessGate'] | null;
+  /** The body gate on the pose, null when the analysis rejected. */
+  bodyGate: BodyGate | null;
+  /** The body's features when the gate passed, else null. */
+  features: BodyFeatures | null;
 };
 
 /** How long a sample waits for the hair to come off. */
@@ -72,10 +78,22 @@ async function sample(input: {
       current: store.getState().params,
       heightCm: input.body.heightCm,
     });
-    return { error: null, poseFound: result.pose !== null, likenessGate: result.likenessGate };
+    return {
+      error: null,
+      poseFound: result.pose !== null,
+      likenessGate: result.likenessGate,
+      bodyGate: result.body.gate,
+      features: result.body.measurement?.features ?? null,
+    };
   } catch (error) {
     if (error instanceof AnalysisError) {
-      return { error: error.code, poseFound: false, likenessGate: null };
+      return {
+        error: error.code,
+        poseFound: false,
+        likenessGate: null,
+        bodyGate: null,
+        features: null,
+      };
     }
     throw error;
   }

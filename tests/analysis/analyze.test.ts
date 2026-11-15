@@ -7,10 +7,11 @@ import {
   messageFor,
   pickLargest,
 } from '../../src/analysis/analyze';
+import { headTopFactor, headTopY } from '../../src/analysis/body/measure';
 import { DecodeError } from '../../src/analysis/image';
 import { faceBox, LM, toPixels } from '../../src/analysis/landmarks';
 import { dilateMask, expandBox, maskForCrop } from '../../src/analysis/masks';
-import { faceFromCrop, headCropRect } from '../../src/analysis/pose';
+import { faceFromCrop, headCropRect, POSE } from '../../src/analysis/pose';
 import {
   MASK,
   type Box,
@@ -19,10 +20,10 @@ import {
   type PoseObservation,
   type RgbaImage,
 } from '../../src/analysis/types';
-import { avatarParamsSchema } from '../../src/catalog/params';
-import type { Correspondence } from '../../src/likeness/correspondence';
+import { avatarParamsSchema, defaultParams } from '../../src/catalog/params';
 import type { Likeness } from '../../src/likeness/types';
 import { strings } from '../../src/ui/strings';
+import { headCorrespondence, synthBody } from '../../tools/test-fixtures/body';
 import { synthFace } from '../../tools/test-fixtures/canonicalFace';
 
 vi.mock('../../src/analysis/image', async (importOriginal) => {
@@ -37,8 +38,11 @@ const fx = synthFace();
 const blob = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' });
 /** The synthetic face's width in the analysed image (≈ 184 px). */
 const ANALYSED_WIDTH = faceBox(toPixels(fx.face)).width;
-/** Stands in for the correspondence: analyzePhoto only hands it on to buildLikeness (mocked). */
-const CORR = { version: 1 } as unknown as Correspondence;
+/**
+ * Stands in for the correspondence: analyzePhoto reads the head's proportion from it (headTopFactor)
+ * and hands it on to buildLikeness (mocked).
+ */
+const CORR = headCorrespondence();
 const LIKENESS: Likeness = {
   version: 1,
   faceTexture: new Blob([new Uint8Array([1])], { type: 'image/webp' }),
@@ -278,6 +282,64 @@ describe('poses and the head crop', () => {
     expect(result.face).toBe(fx.face);
 
     expect((await analyzePhoto(blob, { catalog: null, adapter: adapter() })).pose).toBeNull();
+  });
+});
+
+describe('the body gate and the body measurement', () => {
+  /** A full-length figure in a 640×800 analysed image, and a face over its head. */
+  const figure = synthBody({ width: 640, height: 800, centreX: 320, headTopY: 60, heightPx: 680 });
+  const head = figure.faceBox;
+  const person = synthFace({
+    centre: { x: head.x + head.width / 2, y: head.y + head.height / 2 },
+    scale: (12 * head.width) / ANALYSED_WIDTH,
+  });
+  const current = {
+    ...defaultParams,
+    body: { ...defaultParams.body, heightCm: 170, gender: 0.7, weight: 0.5, hips: -0.4 },
+  };
+
+  function analyse(pose: PoseObservation, heightCm?: number) {
+    // The face 300 px wide at full resolution: past the projection gate.
+    decodedAt(300 / faceBox(toPixels(person.face)).width, person.image);
+    const a = adapter([person.face], {
+      detectPoses: vi.fn().mockReturnValue([pose]),
+      segment: vi.fn().mockReturnValue(figure.mask),
+    });
+    return analyzePhoto(blob, { catalog: null, current, heightCm, adapter: a });
+  }
+
+  test("gate 'ok': the body is measured, and params.body is the default body at the entered height", async () => {
+    const result = await analyse(figure.pose, 180);
+    expect(result.pose).toBe(figure.pose);
+    expect(result.body.gate).toBe('ok');
+    expect(result.body.measurement).not.toBeNull();
+    // The head top from the face's landmarks and the base's head proportion (spec §6).
+    expect(result.body.measurement!.headTopY).toBeCloseTo(
+      headTopY(person.face, headTopFactor(CORR)),
+      9,
+    );
+    // Every morph 0, the current gender, the height entered.
+    expect(result.params.body).toEqual({ ...defaultParams.body, gender: 0.7, heightCm: 180 });
+    expect(avatarParamsSchema.safeParse(result.params).success).toBe(true);
+    expect(result.likenessGate).toBe('ok');
+  });
+
+  test("gate 'not_visible': no measurement, and the photo face is still built", async () => {
+    const landmarks = figure.pose.landmarks.map((p, i) =>
+      i === POSE.ankleR ? { ...p, visibility: 0.3 } : p,
+    );
+    const result = await analyse({ ...figure.pose, landmarks });
+    expect(result.body).toEqual({ gate: 'not_visible', measurement: null });
+    expect(result.likenessGate).toBe('ok');
+    expect(result.likeness).toBe(LIKENESS);
+    // No height entered: the current one.
+    expect(result.params.body).toEqual({ ...defaultParams.body, gender: 0.7, heightCm: 170 });
+  });
+
+  test('no pose → no_pose, and the default body', async () => {
+    const result = await analyzePhoto(blob, { catalog: null, current, adapter: adapter() });
+    expect(result.body).toEqual({ gate: 'no_pose', measurement: null });
+    expect(result.params.body).toEqual({ ...defaultParams.body, gender: 0.7, heightCm: 170 });
   });
 });
 

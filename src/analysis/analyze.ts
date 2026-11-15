@@ -1,9 +1,11 @@
 import type { Catalog } from '../catalog/catalog';
-import type { AvatarParams } from '../catalog/params';
+import { defaultParams, type AvatarParams } from '../catalog/params';
 import { buildLikeness, type LikenessDebug } from '../likeness/buildLikeness';
 import { loadCorrespondence, type Correspondence } from '../likeness/correspondence';
 import type { Likeness } from '../likeness/types';
 import { strings } from '../ui/strings';
+import { checkBodyGate, type BodyGate } from './body/gate';
+import { headTopFactor, headTopY, measureBody, type BodyMeasurement } from './body/measure';
 import { cropCanvas, cropFace, decodePhoto, DecodeError } from './image';
 import { faceBox, headPose, toPixels } from './landmarks';
 import { analyzeToParams, type AnalysisDebug } from './mapping';
@@ -73,6 +75,11 @@ export type AnalyzeResult = {
   faceBox: Box;
   /** The pose whose nose lies in the chosen face's box (pickPose); null when none does. */
   pose: PoseObservation | null;
+  /**
+   * The body gate on `pose` (spec §6), and the body measured on the photo when it is 'ok'. Whatever the
+   * gate, `params.body` is the default body (bodyParams).
+   */
+  body: { gate: BodyGate; measurement: BodyMeasurement | null };
   /** The photo face when likenessGate is 'ok'; otherwise null, and `params.face` is 'default'. */
   likeness: Likeness | null;
   /**
@@ -118,18 +125,18 @@ export function applyGates(face: FaceObservation, fullScale: number): void {
 
 /**
  * Photo → AvatarParams and the Likeness, entirely on the device: load models and correspondence →
- * decode → detect faces and poses (findFaces) → largest face → gates → its pose → segment → map →
- * (projection gate) → crop → likeness. Every expected failure is an AnalysisError with a user-facing
- * message (messageFor). A failure while building the likeness does not reject: the params come back
- * with the default face, `likeness: null` and `likenessGate: 'failed'`. The full-resolution bitmap is
- * closed whatever happens.
+ * decode → detect faces and poses (findFaces) → largest face → gates → its pose → segment → body gate
+ * and measurement → map → (projection gate) → crop → likeness. Every expected failure is an
+ * AnalysisError with a user-facing message (messageFor). A failure while building the likeness does
+ * not reject: the params come back with the default face, `likeness: null` and `likenessGate:
+ * 'failed'`. The full-resolution bitmap is closed whatever happens.
  */
 export async function analyzePhoto(
   file: Blob,
   opts: {
     catalog: Catalog | null;
     current?: AvatarParams;
-    /** The height the user entered (cm), for the body measurement (spec §6); not read yet. */
+    /** The height the user entered (cm): `params.body.heightCm` (spec §6); else the current one. */
     heightCm?: number;
     onProgress?: ModelProgress;
     adapter?: Adapter;
@@ -161,14 +168,35 @@ export async function analyzePhoto(
     const box = faceBox(toPixels(face));
     const pose = pickPose(poses, box);
     const mask = adapter.segment(decoded.canvas);
-    const { params, debug } = analyzeToParams(
+    const gate = checkBodyGate(pose);
+    const measurement =
+      pose && gate === 'ok'
+        ? measureBody({
+            pose,
+            mask,
+            faceBox: box,
+            headTopY: headTopY(face, headTopFactor(corr)),
+            width: decoded.image.width,
+            height: decoded.image.height,
+          })
+        : null;
+    const mapped = analyzeToParams(
       { face, mask, image: decoded.image, faceBox: box },
       {
         catalog: opts.catalog,
         current: opts.current,
       },
     );
-    const result = { debug, face, mask, preview: decoded.canvas, faceBox: box, pose };
+    const params = { ...mapped.params, body: bodyParams(opts.current, opts.heightCm) };
+    const result = {
+      debug: mapped.debug,
+      face,
+      mask,
+      preview: decoded.canvas,
+      faceBox: box,
+      pose,
+      body: { gate, measurement },
+    };
     if (box.width * fullScale < GATES.minProjectionFaceWidthPx) {
       return {
         ...result,
@@ -203,6 +231,18 @@ export async function analyzePhoto(
   } finally {
     decoded.bitmap.close();
   }
+}
+
+/**
+ * The body the analysis returns (spec §6): every morph 0, the current gender (never inferred) and the
+ * height entered, else the current height.
+ */
+function bodyParams(
+  current: AvatarParams | undefined,
+  heightCm: number | undefined,
+): AvatarParams['body'] {
+  const body = (current ?? defaultParams).body;
+  return { ...defaultParams.body, gender: body.gender, heightCm: heightCm ?? body.heightCm };
 }
 
 /**

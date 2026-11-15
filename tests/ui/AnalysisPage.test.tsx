@@ -34,6 +34,7 @@ const base: AnalyzeResult = {
   preview: document.createElement('canvas'),
   faceBox: box,
   pose: null,
+  body: { gate: 'no_pose', measurement: null },
   likeness: null,
   likenessGate: 'too_small',
   likenessDebug: null,

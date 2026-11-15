@@ -7,7 +7,7 @@ export function categoryEquals(mask: CategoryMask, value: number): Uint8Array {
   return out;
 }
 
-/** Nearest-neighbour resample of a 0/1 mask. */
+/** Nearest-neighbour resample of a 0/1 mask, or of a category mask's values. */
 export function resampleMask(
   data: Uint8Array,
   fromW: number,
