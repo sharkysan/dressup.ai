@@ -124,11 +124,15 @@ test.each(['leftTouching', 'bothTouching'] as const)(
   },
 );
 
-test.each([5, 20])(
-  'arms %i px off the torso’s side, either side of the 8 px bridge: the bust, waist and hip widths within 1 px of the clear figure’s',
-  (armGapPx) => {
+test.each([
+  { armGapPx: 5, arms: 'bare' },
+  { armGapPx: 20, arms: 'bare' },
+  { armGapPx: 5, arms: 'in sleeves' },
+])(
+  'arms $arms $armGapPx px off the torso’s side, either side of the 8 px bridge: the bust, waist and hip widths within 1 px of the clear figure’s',
+  ({ armGapPx, arms }) => {
     const clear = measure().m;
-    const { m } = measure({ arms: 'bothTouching', armGapPx });
+    const { m } = measure({ arms: 'bothTouching', armGapPx, sleeves: arms === 'in sleeves' });
     expect(MEASURE.gapFraction * m.heightPx).toBe(8);
     // The span bridges a gap under the bridge, but the side still ends at it, as it does past the
     // bridge: the width is the torso's either way, not the torso's and the gaps.
@@ -187,7 +191,7 @@ test.each([
   },
 );
 
-const NEAR_HOLES: {
+type HoleCase = {
   arms: 'leftTouching' | 'bothTouching';
   hole: string;
   off: number;
@@ -196,7 +200,31 @@ const NEAR_HOLES: {
   category?: number;
   /** A hole on the subject's right too, as far off the midline. */
   bothSides?: boolean;
-}[] = [
+  /** The arms in sleeves, labelled clothes like the torso (by default bare skin). */
+  sleeves?: boolean;
+};
+
+/**
+ * The figure with a 3 px hole `off` px off the midline in its clothes, on the subject's left (x 300 +
+ * off ..) and, with `bothSides`, mirrored on the right (.. x 299 − off); the holes in these cases lie
+ * clear of the sleeves. Checks the bust, waist and hip widths stay within 1 px of the clear figure's.
+ */
+function expectHoleIgnored({ arms, off, speckle, category, bothSides, sleeves }: HoleCase) {
+  const clear = measure().m;
+  const fx = synthBody({ arms, sleeves });
+  const [w0, w1] = bandRows(fx, 'waist');
+  const mid = Math.floor((w0 + w1) / 2);
+  const rows: [number, number] = speckle ? [mid, mid + 1] : [0, fx.mask.height];
+  const xs = bothSides ? [300 + off, 297 - off] : [300 + off];
+  const m = measureOf(fx, { mask: holed(fx, xs, rows, category) })!;
+  expect(m.features.upperArmWidth * m.heightPx).toBeCloseTo(36, 0);
+  for (const f of TORSO) {
+    expect(Math.abs(m.features[f] - clear.features[f]), f).toBeLessThanOrEqual(1 / m.heightPx);
+  }
+  expect(m.armsTouching).toEqual({ left: true, right: arms === 'bothTouching' });
+}
+
+const NEAR_HOLES: HoleCase[] = [
   { arms: 'leftTouching', hole: 'a strap down the torso', off: 40 },
   { arms: 'bothTouching', hole: 'a strap down the torso', off: 40 },
   { arms: 'bothTouching', hole: 'a speckle on one waist row', off: 40, speckle: true },
@@ -210,29 +238,48 @@ const NEAR_HOLES: {
   { arms: 'leftTouching', hole: 'a strap down the torso', off: 50 },
   { arms: 'bothTouching', hole: 'a strap down the torso', off: 50 },
   { arms: 'bothTouching', hole: 'a strap down each side of the torso', off: 45, bothSides: true },
+  { arms: 'bothTouching', hole: 'sleeves and a strap down the torso', off: 40, sleeves: true },
+  {
+    arms: 'bothTouching',
+    hole: 'sleeves and a strap down each side of the torso',
+    off: 45,
+    bothSides: true,
+    sleeves: true,
+  },
 ];
 
 test.each(NEAR_HOLES)(
   'arms $arms, with $hole $off px off the midline: a hole within reach of the arm’s axis but well inside the torso is not the gap to the arm, and the bust, waist and hip widths stay within 1 px of the clear figure’s',
-  ({ arms, off, speckle, category, bothSides }) => {
-    const clear = measure().m;
-    const fx = synthBody({ arms });
-    const [w0, w1] = bandRows(fx, 'waist');
-    const mid = Math.floor((w0 + w1) / 2);
-    const rows: [number, number] = speckle ? [mid, mid + 1] : [0, fx.mask.height];
-    // On the subject's left (x 300 + off ..), and mirrored on the right (.. x 299 − off).
-    const xs = bothSides ? [300 + off, 297 - off] : [300 + off];
+  (c) => {
     // The hole starts within reach of the touching arm's axis (1.5 × the upper arm's 36 px) across
     // the waist band, and across the bust at 45–50 px off, so it could be the gap to the arm. But the
     // side would end well inside the torso: at most 0.71 × the other side's half-width (under ¾);
     // and with a hole on each side alike, where the two sides agree, at most 0.64 × its own arm's
     // (its axis less half the upper arm; under 0.7). It ends at a hole in the torso: the arm touches.
-    const m = measureOf(fx, { mask: holed(fx, xs, rows, category) })!;
-    expect(m.features.upperArmWidth * m.heightPx).toBeCloseTo(36, 0);
-    for (const f of TORSO) {
-      expect(Math.abs(m.features[f] - clear.features[f]), f).toBeLessThanOrEqual(1 / m.heightPx);
-    }
-    expect(m.armsTouching).toEqual({ left: true, right: arms === 'bothTouching' });
+    // So it does in sleeves too, where the arm and the torso are both clothes.
+    expectHoleIgnored(c);
+  },
+);
+
+const CLOSE_HOLES: HoleCase[] = [
+  { arms: 'bothTouching', hole: 'a speckle on one waist row', off: 55, speckle: true },
+  { arms: 'leftTouching', hole: 'a strap down the torso', off: 55 },
+  { arms: 'leftTouching', hole: 'a strap down the torso', off: 60 },
+  { arms: 'leftTouching', hole: 'a strap down the torso', off: 65 },
+  { arms: 'bothTouching', hole: 'a strap down the torso', off: 65 },
+  { arms: 'bothTouching', hole: 'a strap down the torso', off: 70 },
+  { arms: 'bothTouching', hole: 'a strap down each side of the torso', off: 50, bothSides: true },
+  { arms: 'bothTouching', hole: 'a strap down each side of the torso', off: 60, bothSides: true },
+];
+
+test.each(CLOSE_HOLES)(
+  'arms $arms, with $hole $off px off the midline: a hole close to the torso’s side lies past where the arm’s skin meets the torso’s clothes, so it is not the gap to the arm, and the bust, waist and hip widths stay within 1 px of the clear figure’s',
+  (c) => {
+    // 55–70 px off, within about a quarter of the half-width of the torso's side (the waist's 70 px,
+    // the bust's 85, the hips' 92), the side still reaches ¾ of the other side's half-width and 0.7
+    // of its own arm's: the agreement can't tell the hole from the gap. But the walk from the arm's
+    // axis passes from its skin into the torso's clothes before the hole: the arm touches the torso.
+    expectHoleIgnored(c);
   },
 );
 

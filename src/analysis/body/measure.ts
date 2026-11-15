@@ -123,8 +123,17 @@ export function personRegion(
   return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
 }
 
-/** The body silhouette and the hair, 0/1 at the analysed size, each restricted to the person region. */
-type Silhouette = { body: Uint8Array; hair: Uint8Array; width: number; height: number };
+/**
+ * The body silhouette and the hair, 0/1 at the analysed size, each restricted to the person region;
+ * `clothes` marks the body's clothes (the rest of it is skin).
+ */
+type Silhouette = {
+  body: Uint8Array;
+  hair: Uint8Array;
+  clothes: Uint8Array;
+  width: number;
+  height: number;
+};
 
 /**
  * A torso width measured on one row: the half-widths about the midline, as a segment. `fromAxes`: both
@@ -146,8 +155,9 @@ type Arm = { side: 'left' | 'right'; shoulder: Point2; elbow: Point2; wrist: Poi
  *   midline too; then the hair is trimmed off both ends. A row whose span does not hold the midline is
  *   skipped. In the bust, waist and hip bands a side whose arm axis (shoulder→elbow, or elbow→wrist
  *   below the elbow) lies inside the span ends at the background between arm and torso, when the span
- *   bridged some that starts within `armGapReach` × the upper arm's width of the axis (torsoEdge), and
- *   the side then reaches `sideAgreement` × the other side's half-width and `axisAgreement` × the
+ *   bridged some that starts within `armGapReach` × the upper arm's width of the axis, before the walk
+ *   from the axis passes from the arm's label (skin, or a sleeve's clothes) to the other (torsoEdge),
+ *   and the side then reaches `sideAgreement` × the other side's half-width and `axisAgreement` × the
  *   half-width from its own arm (a hole farther in is the torso's own). Otherwise its arm touches: the
  *   side takes the other side's half-width, or, when both touch, each side ends at its axis less half
  *   the upper arm's width, and the row counts only in a band with no other row. Per band: the
@@ -254,6 +264,7 @@ function silhouette(mask: CategoryMask, region: Box, width: number, height: numb
   const categories = resampleMask(mask.data, mask.width, mask.height, width, height);
   const body = new Uint8Array(width * height);
   const hair = new Uint8Array(width * height);
+  const clothes = new Uint8Array(width * height);
   const x0 = Math.max(0, Math.floor(region.x));
   const y0 = Math.max(0, Math.floor(region.y));
   const x1 = Math.min(width, Math.ceil(region.x + region.width));
@@ -264,9 +275,10 @@ function silhouette(mask: CategoryMask, region: Box, width: number, height: numb
       const c = categories[i];
       if (c === MASK.hair) hair[i] = 1;
       else if (c === MASK.bodySkin || c === MASK.faceSkin || c === MASK.clothes) body[i] = 1;
+      if (c === MASK.clothes) clothes[i] = 1;
     }
   }
-  return { body, hair, width, height };
+  return { body, hair, clothes, width, height };
 }
 
 /**
@@ -440,8 +452,10 @@ function torsoSpan(
  * The torso's outer column on row `y` toward the arm whose axis is at `axis` (inside `span`), when
  * background separates the two: walking from the axis toward the midline, through the arm and over the
  * first gap, the first body column (hair there trimmed off, as at the span's ends). The gap must start
- * within `reach` px of the axis, about the arm's own extent: one farther in is a hole in the torso.
- * Null when the walk meets the midline or passes `reach` first: the arm touches the torso.
+ * within `reach` px of the axis, about the arm's own extent, and before the walk passes from the arm's
+ * label (skin, or a sleeve's clothes) to the other: there it enters the torso, and background farther
+ * in is a hole in the torso. Null when the walk meets the midline, passes `reach` or changes label
+ * first: the arm touches the torso.
  */
 function torsoEdge(
   sil: Silhouette,
@@ -451,13 +465,21 @@ function torsoEdge(
   span: { left: number; right: number },
   reach: number,
 ): number | null {
-  const { body, hair, width } = sil;
+  const { body, hair, clothes, width } = sil;
   const row = y * width;
   const set = (x: number) => (body[row + x]! | hair[row + x]!) === 1;
   const m = Math.floor(mid);
   const step = axis < mid ? 1 : -1;
   let x = Math.min(span.right, Math.max(span.left, Math.floor(axis)));
-  while (x !== m && set(x)) x += step;
+  // The arm's label, skin or clothes, from the walk's first body column; hair, over either, is passed.
+  let armClothes: number | null = null;
+  while (x !== m && set(x)) {
+    if (body[row + x]) {
+      armClothes ??= clothes[row + x]!;
+      if (clothes[row + x] !== armClothes) return null;
+    }
+    x += step;
+  }
   // The gap's near edge: column x's left side walking right, its right side walking left.
   const start = step > 0 ? x - axis : axis - (x + 1);
   if (x === m || start > reach) return null;

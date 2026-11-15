@@ -36,6 +36,8 @@ export type SynthBodyOptions = {
    * default.
    */
   armGapPx?: number;
+  /** The arms in the top's sleeves, labelled clothes like the torso (by default they are bare skin). */
+  sleeves?: boolean;
   /** The thighs touch at the midline (by default they are apart). */
   legsTouching?: boolean;
   /**
@@ -66,6 +68,7 @@ type FigureSpec = {
   halfWidths: { shoulder: number; bust: number; waist: number; hip: number };
   touching: { left: boolean; right: boolean };
   armGapPx: number;
+  sleeves: boolean;
   legsTouching: boolean;
   hair: boolean;
 };
@@ -103,6 +106,7 @@ export function synthBody(opts: SynthBodyOptions = {}): SynthBody {
     halfWidths: opts.halfWidths ?? HALF_WIDTHS,
     touching: { left: arms !== 'clear', right: arms === 'bothTouching' },
     armGapPx: opts.armGapPx ?? 0,
+    sleeves: opts.sleeves ?? false,
     legsTouching: opts.legsTouching ?? false,
     hair: opts.hairPastShoulders ?? false,
   };
@@ -116,13 +120,16 @@ export function synthBody(opts: SynthBodyOptions = {}): SynthBody {
 
   const data = new Uint8Array(size.width * size.height); // background
   for (const f of figures) {
-    // Hair behind the body; the base layer (the torso) as clothes; the arms and legs over it.
+    // Hair behind the body; the base layer (the torso) as clothes; the arms (bare, or in sleeves) and
+    // the legs over it.
+    const arm = spec.sleeves ? MASK.clothes : MASK.bodySkin;
     const parts: [Layer | null, number][] = [
       [f.hair, MASK.hair],
       [f.head, MASK.faceSkin],
       [f.neck, MASK.bodySkin],
       [f.torso, MASK.clothes],
-      ...[...f.arms, ...f.legs].map((l): [Layer, number] => [l, MASK.bodySkin]),
+      ...f.arms.map((l): [Layer, number] => [l, arm]),
+      ...f.legs.map((l): [Layer, number] => [l, MASK.bodySkin]),
     ];
     for (const [layer, category] of parts) {
       if (!layer) continue;
