@@ -57,15 +57,22 @@ function striped(fx: SynthBody, w: number, ...rows: [number, number][]): Categor
 }
 
 /**
- * The figure's mask with a 3 px hole in its clothes at columns x0..x0 + 2 on rows y0..y1 − 1: a strap
- * or an accessory the segmenter labels 'others', which is not the body.
+ * The figure's mask with a 3 px hole in its clothes at columns x0..x0 + 2, for each x0 of `xs`, on rows
+ * y0..y1 − 1: by default a strap or an accessory the segmenter labels 'others', which is not the body.
  */
-function holed(fx: SynthBody, x0: number, [y0, y1]: [number, number]): CategoryMask {
+function holed(
+  fx: SynthBody,
+  xs: number[],
+  [y0, y1]: [number, number],
+  category: number = MASK.others,
+): CategoryMask {
   const data = fx.mask.data.slice();
   for (let y = y0; y < y1; y++) {
-    for (let x = x0; x < x0 + 3; x++) {
-      const i = y * fx.mask.width + x;
-      if (data[i] === MASK.clothes) data[i] = MASK.others;
+    for (const x0 of xs) {
+      for (let x = x0; x < x0 + 3; x++) {
+        const i = y * fx.mask.width + x;
+        if (data[i] === MASK.clothes) data[i] = category;
+      }
     }
   }
   return { ...fx.mask, data };
@@ -171,7 +178,56 @@ test.each([
     // The hole (x 320..322) starts 65–81 px in from the touching arm's axis: past 1.5 × the upper
     // arm's 36 px, so it is the torso's own, and the arm touches. One such row, seen, would otherwise
     // be the waist's narrowest, or outvote every row read from both arm axes.
-    const m = measureOf(fx, { mask: holed(fx, 320, rows) })!;
+    const m = measureOf(fx, { mask: holed(fx, [320], rows) })!;
+    expect(m.features.upperArmWidth * m.heightPx).toBeCloseTo(36, 0);
+    for (const f of TORSO) {
+      expect(Math.abs(m.features[f] - clear.features[f]), f).toBeLessThanOrEqual(1 / m.heightPx);
+    }
+    expect(m.armsTouching).toEqual({ left: true, right: arms === 'bothTouching' });
+  },
+);
+
+const NEAR_HOLES: {
+  arms: 'leftTouching' | 'bothTouching';
+  hole: string;
+  off: number;
+  /** One waist row (a speckle) instead of every row (a strap). */
+  speckle?: boolean;
+  category?: number;
+  /** A hole on the subject's right too, as far off the midline. */
+  bothSides?: boolean;
+}[] = [
+  { arms: 'leftTouching', hole: 'a strap down the torso', off: 40 },
+  { arms: 'bothTouching', hole: 'a strap down the torso', off: 40 },
+  { arms: 'bothTouching', hole: 'a speckle on one waist row', off: 40, speckle: true },
+  {
+    arms: 'leftTouching',
+    hole: 'a background speckle on one waist row',
+    off: 40,
+    speckle: true,
+    category: MASK.background,
+  },
+  { arms: 'leftTouching', hole: 'a strap down the torso', off: 50 },
+  { arms: 'bothTouching', hole: 'a strap down the torso', off: 50 },
+  { arms: 'bothTouching', hole: 'a strap down each side of the torso', off: 45, bothSides: true },
+];
+
+test.each(NEAR_HOLES)(
+  'arms $arms, with $hole $off px off the midline: a hole within reach of the arm’s axis but well inside the torso is not the gap to the arm, and the bust, waist and hip widths stay within 1 px of the clear figure’s',
+  ({ arms, off, speckle, category, bothSides }) => {
+    const clear = measure().m;
+    const fx = synthBody({ arms });
+    const [w0, w1] = bandRows(fx, 'waist');
+    const mid = Math.floor((w0 + w1) / 2);
+    const rows: [number, number] = speckle ? [mid, mid + 1] : [0, fx.mask.height];
+    // On the subject's left (x 300 + off ..), and mirrored on the right (.. x 299 − off).
+    const xs = bothSides ? [300 + off, 297 - off] : [300 + off];
+    // The hole starts within reach of the touching arm's axis (1.5 × the upper arm's 36 px) across
+    // the waist band, and across the bust at 45–50 px off, so it could be the gap to the arm. But the
+    // side would end well inside the torso: at most 0.71 × the other side's half-width (under ¾);
+    // and with a hole on each side alike, where the two sides agree, at most 0.64 × its own arm's
+    // (its axis less half the upper arm; under 0.7). It ends at a hole in the torso: the arm touches.
+    const m = measureOf(fx, { mask: holed(fx, xs, rows, category) })!;
     expect(m.features.upperArmWidth * m.heightPx).toBeCloseTo(36, 0);
     for (const f of TORSO) {
       expect(Math.abs(m.features[f] - clear.features[f]), f).toBeLessThanOrEqual(1 / m.heightPx);

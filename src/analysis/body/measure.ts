@@ -37,6 +37,11 @@ export const MEASURE = {
   // × the upper arm's width: how far from an arm's axis the gap between arm and torso may start; a hole
   // farther in is the torso's own (a strap, a speckle). On the avatar's renders it starts ≤ 1.19×.
   armGapReach: 1.5,
+  // The least a side ending at the gap to its arm may reach, × the other side's half-width and × the
+  // half-width from its own arm (to the axis, less half the upper arm's width); one that comes shorter
+  // ends at a hole in the torso. On the avatar's renders such a side reaches ≥ 0.775× and ≥ 0.74×.
+  sideAgreement: 0.75,
+  axisAgreement: 0.7,
   // t = 0 at the shoulder line, 1 at the hip line (mean y of 11/12, of 23/24)
   bands: { shoulder: [-0.05, 0.1], bust: [0.3, 0.4], waist: [0.55, 0.85], hip: [0.9, 1.1] },
   limbAt: { upperArm: 0.5, thigh: 1 / 3, calf: 1 / 3 }, // along shoulder→elbow, hip→knee, knee→ankle
@@ -141,11 +146,12 @@ type Arm = { side: 'left' | 'right'; shoulder: Point2; elbow: Point2; wrist: Poi
  *   midline too; then the hair is trimmed off both ends. A row whose span does not hold the midline is
  *   skipped. In the bust, waist and hip bands a side whose arm axis (shoulder→elbow, or elbow→wrist
  *   below the elbow) lies inside the span ends at the background between arm and torso, when the span
- *   bridged some that starts within `armGapReach` × the upper arm's width of the axis (torsoEdge; a
- *   hole farther in is the torso's own). Otherwise its arm touches: the side takes the other side's
- *   half-width, or, when both touch, each side ends at its axis less half the upper arm's width, and
- *   the row counts only in a band with no other row. Per band: the shoulder's widest row, the bust's
- *   median, the waist's narrowest, the hip's widest.
+ *   bridged some that starts within `armGapReach` × the upper arm's width of the axis (torsoEdge), and
+ *   the side then reaches `sideAgreement` × the other side's half-width and `axisAgreement` × the
+ *   half-width from its own arm (a hole farther in is the torso's own). Otherwise its arm touches: the
+ *   side takes the other side's half-width, or, when both touch, each side ends at its axis less half
+ *   the upper arm's width, and the row counts only in a band with no other row. Per band: the
+ *   shoulder's widest row, the bust's median, the waist's narrowest, the hip's widest.
  * - Limb width: across the limb at `limbAt` along it, walking the perpendicular over the body (no hair)
  *   both ways to the background: twice the shorter half, so a hand on the thigh or touching legs never
  *   widen it.
@@ -306,7 +312,13 @@ function torsoWidths(
     let { left, right } = span;
     let axisLo: number | null = null;
     let axisHi: number | null = null;
+    /** A side's half-width taken from its touching arm: to the axis, less half the upper arm's width. */
+    const fromAxis = (axis: number) =>
+      axis < mid
+        ? Math.max(0, mid - (axis + upperArmWidth / 2))
+        : Math.max(0, axis - upperArmWidth / 2 - mid);
     if (armRule) {
+      const gaps: { arm: Arm; x: number }[] = [];
       for (const arm of arms) {
         const x = axisX(arm, yc);
         if (x === null || x < span.left || x > span.right + 1) continue;
@@ -315,19 +327,37 @@ function torsoWidths(
         if (edge !== null) {
           if (x < mid) left = edge;
           else right = edge;
+          gaps.push({ arm, x });
           continue;
         }
         armsTouching[arm.side] = true;
         if (x < mid) axisLo ??= x;
         else axisHi ??= x;
       }
+      // A side ending at a gap agrees with the other side and with its own arm: one that comes short
+      // of `sideAgreement` × the other side's half-width (seen, at its own gap, or from its axis), or
+      // of `axisAgreement` × the half-width from its own arm (fromAxis), ends at a hole in the torso,
+      // and the arm touches. The first catches a hole on one side, the second holes on both alike.
+      const loHalf = axisLo !== null ? fromAxis(axisLo) : mid - left;
+      const hiHalf = axisHi !== null ? fromAxis(axisHi) : right + 1 - mid;
+      for (const { arm, x } of gaps) {
+        const isLo = x < mid;
+        if ((isLo ? axisLo : axisHi) !== null) continue; // another arm touches on that side
+        const [half, other] = isLo ? [loHalf, hiHalf] : [hiHalf, loHalf];
+        if (half >= MEASURE.sideAgreement * other && half >= MEASURE.axisAgreement * fromAxis(x)) {
+          continue;
+        }
+        armsTouching[arm.side] = true;
+        if (isLo) axisLo = x;
+        else axisHi = x;
+      }
     }
     // Half-widths on the image's left (lo) and right (hi) of the midline, both ≥ 0: the span holds it.
     let lo = mid - left;
     let hi = right + 1 - mid;
     if (axisLo !== null && axisHi !== null) {
-      lo = Math.max(0, mid - (axisLo + upperArmWidth / 2));
-      hi = Math.max(0, axisHi - upperArmWidth / 2 - mid);
+      lo = fromAxis(axisLo);
+      hi = fromAxis(axisHi);
     } else if (axisLo !== null) {
       lo = hi;
     } else if (axisHi !== null) {
