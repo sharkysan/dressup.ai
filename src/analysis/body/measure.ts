@@ -118,8 +118,11 @@ export function personRegion(
 /** The body silhouette and the hair, 0/1 at the analysed size, each restricted to the person region. */
 type Silhouette = { body: Uint8Array; hair: Uint8Array; width: number; height: number };
 
-/** A torso width measured on one row: the half-widths about the midline, as a segment. */
-type RowWidth = { width: number; a: Point2; b: Point2 };
+/**
+ * A torso width measured on one row: the half-widths about the midline, as a segment. `fromAxes`: both
+ * arms touched, so both sides were taken from the arm axes rather than seen.
+ */
+type RowWidth = { width: number; a: Point2; b: Point2; fromAxes: boolean };
 
 type Arm = { side: 'left' | 'right'; shoulder: Point2; elbow: Point2; wrist: Point2 };
 
@@ -134,9 +137,11 @@ type Arm = { side: 'left' | 'right'; shoulder: Point2; elbow: Point2; wrist: Poi
  *   and mid-hip points), bridging background gaps up to `gapFraction` × heightPx long, one at the
  *   midline too; then the hair is trimmed off both ends. A row whose span does not hold the midline is
  *   skipped. In the bust, waist and hip bands a side whose arm axis (shoulder→elbow, or elbow→wrist
- *   below the elbow) lies inside the span touches: it takes the other side's half-width, or, when both
- *   touch, each side ends at its axis less half the upper arm's width. Per band: the shoulder's widest
- *   row, the bust's median, the waist's narrowest, the hip's widest.
+ *   below the elbow) lies inside the span ends at the background between arm and torso, when the span
+ *   bridged some (torsoEdge). Otherwise its arm touches: the side takes the other side's half-width,
+ *   or, when both touch, each side ends at its axis less half the upper arm's width, and the row counts
+ *   only in a band with no other row. Per band: the shoulder's widest row, the bust's median, the
+ *   waist's narrowest, the hip's widest.
  * - Limb width: across the limb at `limbAt` along it, walking the perpendicular over the body (no hair)
  *   both ways to the background: twice the shorter half, so a hand on the thigh or touching legs never
  *   widen it.
@@ -293,29 +298,42 @@ function torsoWidths(
     const mid = shoulder.x + ((yc - shoulder.y) / length) * (hip.x - shoulder.x);
     const span = torsoSpan(sil, y, mid, gapPx);
     if (!span) return null;
-    // Half-widths on the image's left (lo) and right (hi) of the midline, both ≥ 0: the span holds it.
-    let lo = mid - span.left;
-    let hi = span.right + 1 - mid;
+    let { left, right } = span;
+    let axisLo: number | null = null;
+    let axisHi: number | null = null;
     if (armRule) {
-      let axisLo: number | null = null;
-      let axisHi: number | null = null;
       for (const arm of arms) {
         const x = axisX(arm, yc);
         if (x === null || x < span.left || x > span.right + 1) continue;
+        // The span bridged a gap between the torso and this arm: the side ends at the gap.
+        const edge = torsoEdge(sil, y, mid, x, span);
+        if (edge !== null) {
+          if (x < mid) left = edge;
+          else right = edge;
+          continue;
+        }
         armsTouching[arm.side] = true;
         if (x < mid) axisLo ??= x;
         else axisHi ??= x;
       }
-      if (axisLo !== null && axisHi !== null) {
-        lo = Math.max(0, mid - (axisLo + upperArmWidth / 2));
-        hi = Math.max(0, axisHi - upperArmWidth / 2 - mid);
-      } else if (axisLo !== null) {
-        lo = hi;
-      } else if (axisHi !== null) {
-        hi = lo;
-      }
     }
-    return { width: lo + hi, a: { x: mid - lo, y: yc }, b: { x: mid + hi, y: yc } };
+    // Half-widths on the image's left (lo) and right (hi) of the midline, both ≥ 0: the span holds it.
+    let lo = mid - left;
+    let hi = right + 1 - mid;
+    if (axisLo !== null && axisHi !== null) {
+      lo = Math.max(0, mid - (axisLo + upperArmWidth / 2));
+      hi = Math.max(0, axisHi - upperArmWidth / 2 - mid);
+    } else if (axisLo !== null) {
+      lo = hi;
+    } else if (axisHi !== null) {
+      hi = lo;
+    }
+    return {
+      width: lo + hi,
+      a: { x: mid - lo, y: yc },
+      b: { x: mid + hi, y: yc },
+      fromAxes: axisLo !== null && axisHi !== null,
+    };
   };
 
   const band = (feature: BodyFeature, t: readonly [number, number], reduce: Reducer) => {
@@ -323,7 +341,10 @@ function torsoWidths(
     const measured = rows(t)
       .map((y) => measureRow(y, armRule))
       .filter((r): r is RowWidth => r !== null);
-    return measured.length > 0 ? { feature, ...reduce(measured) } : null;
+    // A row whose sides both come from the arm axes is an estimate: it counts only when no row is seen.
+    const seen = measured.filter((r) => !r.fromAxes);
+    const chosen = seen.length > 0 ? seen : measured;
+    return chosen.length > 0 ? { feature, ...reduce(chosen) } : null;
   };
   const { bands } = MEASURE;
   const results = [
@@ -378,6 +399,32 @@ function torsoSpan(
   while (left <= right && !body[row + left]) left++;
   while (right >= left && !body[row + right]) right--;
   return left <= m && m <= right ? { left, right } : null;
+}
+
+/**
+ * The torso's outer column on row `y` toward the arm whose axis is at `axis` (inside `span`), when
+ * background separates the two: walking from the axis toward the midline, through the arm and over the
+ * first gap, the first body column (hair there trimmed off, as at the span's ends). Null when the walk
+ * meets the midline first: the arm touches the torso.
+ */
+function torsoEdge(
+  sil: Silhouette,
+  y: number,
+  mid: number,
+  axis: number,
+  span: { left: number; right: number },
+): number | null {
+  const { body, hair, width } = sil;
+  const row = y * width;
+  const set = (x: number) => (body[row + x]! | hair[row + x]!) === 1;
+  const m = Math.floor(mid);
+  const step = axis < mid ? 1 : -1;
+  let x = Math.min(span.right, Math.max(span.left, Math.floor(axis)));
+  while (x !== m && set(x)) x += step;
+  if (x === m) return null;
+  while (x !== m && !set(x)) x += step;
+  while (x !== m && !body[row + x]) x += step;
+  return x === m ? null : x;
 }
 
 /** The arm's axis at height `y`: shoulder→elbow above the elbow, elbow→wrist below it; null if level. */

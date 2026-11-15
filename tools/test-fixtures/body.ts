@@ -31,6 +31,11 @@ export type SynthBodyOptions = {
   halfWidths?: { shoulder: number; bust: number; waist: number; hip: number };
   /** 'clear': both arms angled away from the torso. A touching arm runs down the torso's side. */
   arms?: 'clear' | 'leftTouching' | 'bothTouching';
+  /**
+   * A touching arm drawn this far (px) further out, with background between it and the torso; 0 by
+   * default.
+   */
+  armGapPx?: number;
   /** The thighs touch at the midline (by default they are apart). */
   legsTouching?: boolean;
   /**
@@ -60,6 +65,7 @@ type FigureSpec = {
   heightPx: number;
   halfWidths: { shoulder: number; bust: number; waist: number; hip: number };
   touching: { left: boolean; right: boolean };
+  armGapPx: number;
   legsTouching: boolean;
   hair: boolean;
 };
@@ -96,6 +102,7 @@ export function synthBody(opts: SynthBodyOptions = {}): SynthBody {
     heightPx: opts.heightPx ?? 800,
     halfWidths: opts.halfWidths ?? HALF_WIDTHS,
     touching: { left: arms !== 'clear', right: arms === 'bothTouching' },
+    armGapPx: opts.armGapPx ?? 0,
     legsTouching: opts.legsTouching ?? false,
     hair: opts.hairPastShoulders ?? false,
   };
@@ -184,7 +191,8 @@ function drawFigure(size: Size, f: FigureSpec): Figure {
 
   // Offsets from the midline. A touching arm's inner edge runs along the torso's side: the upper arm
   // through the middle of the bust band and the waist (t 0.7, the elbow), the forearm from there to the
-  // hips at the hip band's end (t 1.1). Clear arms leave the same shoulders, angled outward.
+  // hips at the hip band's end (t 1.1); all of it `armGapPx` further out. Clear arms leave the same
+  // shoulders, angled outward.
   const shoulderOut = 2 * half.bust - half.waist + radii.arm;
   const elbowY = yAt(0.7);
   const wristY = yAt(1.25);
@@ -200,7 +208,12 @@ function drawFigure(size: Size, f: FigureSpec): Figure {
   const at = (sign: number, offset: number, y: number): Point2 => ({ x: cx + sign * offset, y });
   const arm = (sign: number, touching: boolean): Limb => {
     const o = armOffsets(touching);
-    return [at(sign, shoulderOut, shoulderY), at(sign, o.elbow, elbowY), at(sign, o.wrist, wristY)];
+    const gap = touching ? f.armGapPx : 0;
+    return [
+      at(sign, shoulderOut + gap, shoulderY),
+      at(sign, o.elbow + gap, elbowY),
+      at(sign, o.wrist + gap, wristY),
+    ];
   };
   const leg = (sign: number): Limb => [
     at(sign, legOut, hipY),

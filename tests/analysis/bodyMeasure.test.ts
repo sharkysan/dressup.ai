@@ -102,6 +102,45 @@ test.each(['leftTouching', 'bothTouching'] as const)(
   },
 );
 
+test.each([5, 20])(
+  'arms %i px off the torso’s side, either side of the 8 px bridge: the bust, waist and hip widths within 1 px of the clear figure’s',
+  (armGapPx) => {
+    const clear = measure().m;
+    const { m } = measure({ arms: 'bothTouching', armGapPx });
+    expect(MEASURE.gapFraction * m.heightPx).toBe(8);
+    // The span bridges a gap under the bridge, but the side still ends at it, as it does past the
+    // bridge: the width is the torso's either way, not the torso's and the gaps.
+    for (const f of TORSO) {
+      expect(Math.abs(m.features[f] - clear.features[f]), f).toBeLessThanOrEqual(1 / m.heightPx);
+    }
+  },
+);
+
+test('a row where both arms touch is left out of a band with a row where the torso’s side shows', () => {
+  const clear = measure().m;
+  const fx = synthBody({ arms: 'bothTouching' });
+  // The pose's shoulders and elbows 4 px further out than the drawn arms (the subject's left on the
+  // image's right). Where the arms merge with the torso, the rule from the axes reads each side ~8 px
+  // wide: the axis is 4 px out, and the upper arm, measured from it, ~8 px narrow. The bust band's top
+  // rows show background between arm and torso; its lower rows, the majority, merge.
+  const dx = 4 / fx.mask.width;
+  const pose: PoseObservation = {
+    ...fx.pose,
+    landmarks: fx.pose.landmarks.map((p, i) =>
+      i === POSE.shoulderL || i === POSE.elbowL
+        ? { ...p, x: p.x + dx }
+        : i === POSE.shoulderR || i === POSE.elbowR
+          ? { ...p, x: p.x - dx }
+          : p,
+    ),
+  };
+  const m = measureOf(fx, { pose })!;
+  expect(m.armsTouching).toEqual({ left: true, right: true });
+  expect(Math.abs(m.features.bustWidth - clear.features.bustWidth)).toBeLessThanOrEqual(
+    1 / m.heightPx,
+  );
+});
+
 test('hair past the shoulders leaves the shoulder and bust widths and the area unchanged', () => {
   const bald = measure().m;
   const { fx, m } = measure({ hairPastShoulders: true });
