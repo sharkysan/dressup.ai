@@ -43,8 +43,11 @@ const outfitSchema = z
   })
   .partial();
 
+/** The height's bounds (cm), as entered (spec §5). */
+export const HEIGHT_CM = { min: 140, max: 210 } as const;
+
 const bodySchema = z.object({
-  heightCm: z.number().min(140).max(210),
+  heightCm: z.number().min(HEIGHT_CM.min).max(HEIGHT_CM.max),
   gender: unit,
   weight: signedUnit,
   muscle: signedUnit,

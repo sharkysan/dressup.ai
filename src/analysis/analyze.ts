@@ -1,5 +1,5 @@
 import type { Catalog } from '../catalog/catalog';
-import { defaultParams, type AvatarParams } from '../catalog/params';
+import { avatarParamsSchema, defaultParams, HEIGHT_CM, type AvatarParams } from '../catalog/params';
 import { buildLikeness, type LikenessDebug } from '../likeness/buildLikeness';
 import { loadCorrespondence, type Correspondence } from '../likeness/correspondence';
 import type { Likeness } from '../likeness/types';
@@ -143,7 +143,10 @@ export async function analyzePhoto(
   opts: {
     catalog: Catalog | null;
     current?: AvatarParams;
-    /** The height the user entered (cm): `params.body.heightCm` (spec §6); else the current one. */
+    /**
+     * The height the user entered (cm): `params.body.heightCm` (spec §6), clamped to HEIGHT_CM; the
+     * current one when it is missing or not finite.
+     */
     heightCm?: number;
     onProgress?: ModelProgress;
     adapter?: Adapter;
@@ -208,6 +211,9 @@ export async function analyzePhoto(
         ? { ...body, ...estimateMorphs(measurement.features, body.gender, BODY_CALIBRATION) }
         : body,
     };
+    /** The params returned, with `face`: the analysis output is validated (spec §5), the body too. */
+    const output = (face: AvatarParams['face']): AvatarParams =>
+      avatarParamsSchema.parse({ ...params, face });
     const result = {
       debug: mapped.debug,
       face,
@@ -220,7 +226,7 @@ export async function analyzePhoto(
     if (box.width * fullScale < GATES.minProjectionFaceWidthPx) {
       return {
         ...result,
-        params: { ...params, face: 'default' },
+        params: output('default'),
         likeness: null,
         likenessGate: 'too_small',
         likenessDebug: null,
@@ -235,7 +241,7 @@ export async function analyzePhoto(
       console.warn("analyzePhoto: couldn't build the photo face; using the default face");
       return {
         ...result,
-        params: { ...params, face: 'default' },
+        params: output('default'),
         likeness: null,
         likenessGate: 'failed',
         likenessDebug: null,
@@ -243,7 +249,7 @@ export async function analyzePhoto(
     }
     return {
       ...result,
-      params: { ...params, face: 'photo' },
+      params: output('photo'),
       likeness: built.likeness,
       likenessGate: 'ok',
       likenessDebug: built.debug,
@@ -255,14 +261,19 @@ export async function analyzePhoto(
 
 /**
  * The body the analysis returns without a measurement (spec §6): every morph 0, the current gender
- * (never inferred) and the height entered, else the current height.
+ * (never inferred) and the height entered, clamped to HEIGHT_CM; the current height when none is
+ * entered or it is not finite.
  */
 function bodyParams(
   current: AvatarParams | undefined,
   heightCm: number | undefined,
 ): AvatarParams['body'] {
   const body = (current ?? defaultParams).body;
-  return { ...defaultParams.body, gender: body.gender, heightCm: heightCm ?? body.heightCm };
+  const height =
+    heightCm !== undefined && Number.isFinite(heightCm)
+      ? Math.min(HEIGHT_CM.max, Math.max(HEIGHT_CM.min, heightCm))
+      : body.heightCm;
+  return { ...defaultParams.body, gender: body.gender, heightCm: height };
 }
 
 /**

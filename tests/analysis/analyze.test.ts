@@ -398,11 +398,14 @@ describe('the body gate and the body measurement', () => {
     expect(result.likenessGate).toBe('ok');
   });
 
+  /** The pose with its right ankle hidden (visibility 0.3): the body gate fails. */
+  const withAnkleHidden = (pose: PoseObservation): PoseObservation => ({
+    ...pose,
+    landmarks: pose.landmarks.map((p, i) => (i === POSE.ankleR ? { ...p, visibility: 0.3 } : p)),
+  });
+
   test("gate 'not_visible': no measurement, and the photo face is still built", async () => {
-    const landmarks = figure.pose.landmarks.map((p, i) =>
-      i === POSE.ankleR ? { ...p, visibility: 0.3 } : p,
-    );
-    const result = await analyse({ ...figure.pose, landmarks });
+    const result = await analyse(withAnkleHidden(figure.pose));
     expect(result.body).toEqual({ gate: 'not_visible', measurement: null });
     expect(result.likenessGate).toBe('ok');
     expect(result.likeness).toBe(LIKENESS);
@@ -426,6 +429,32 @@ describe('the body gate and the body measurement', () => {
     expect(result.likeness).toBe(LIKENESS);
     expect(result.params.face).toBe('photo');
   });
+
+  test.each([
+    [Number.NaN, 170],
+    [Number.POSITIVE_INFINITY, 170],
+    [300, 210],
+    [100, 140],
+    [180, 180],
+  ])(
+    'an entered height of %d → params.body.heightCm %d (finite, within the schema’s bounds, else the current one), and the params parse',
+    async (entered, expected) => {
+      const measured = await analyse(figure.pose, entered);
+      expect(measured.body.gate).toBe('ok');
+      expect(measured.params.body.heightCm).toBe(expected);
+      expect(avatarParamsSchema.parse(measured.params)).toEqual(measured.params);
+
+      // Without a measurement too: the default body at that height.
+      const hidden = await analyse(withAnkleHidden(figure.pose), entered);
+      expect(hidden.body.gate).toBe('not_visible');
+      expect(hidden.params.body).toEqual({
+        ...defaultParams.body,
+        gender: 0.7,
+        heightCm: expected,
+      });
+      expect(avatarParamsSchema.parse(hidden.params)).toEqual(hidden.params);
+    },
+  );
 
   test('no pose → no_pose, and the default body', async () => {
     const result = await analyzePhoto(blob, { catalog: null, current, adapter: adapter() });
