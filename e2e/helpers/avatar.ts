@@ -4,11 +4,12 @@ import { defaultParams, type AvatarParams } from '../../src/catalog/params';
 export const portrait = { ...defaultParams.scene, framing: 'portrait' } as const;
 
 /**
- * Opens the app with the dev hook and waits until the avatar is ready, framed (its metrics are measured
- * after load) and wearing the default hair (which lands after ready), so no first shot is half-done.
+ * Opens the app with the dev hook at `viewport` and waits until the avatar is ready, framed (its metrics
+ * are measured after load) and wearing the default hair (which lands after ready), so no first shot is
+ * half-done.
  */
-export async function openAvatar(page: Page) {
-  await page.setViewportSize({ width: 600, height: 900 });
+export async function openAvatar(page: Page, viewport = { width: 600, height: 900 }) {
+  await page.setViewportSize(viewport);
   await page.goto('/#dev');
   await expect(page.getByTestId('viewer')).toHaveAttribute('data-status', 'ready', {
     timeout: 45_000,

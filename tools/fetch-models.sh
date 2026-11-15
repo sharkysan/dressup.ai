@@ -22,13 +22,15 @@ fetch_one() {
     echo "fetched: $dest ($(du -h "$dest" | cut -f1))"
   else
     rm -f "$dest.part"
-    echo "WARNING: could not download $name — face analysis will be unavailable locally; e2e analysis tests will skip." >&2
+    echo "WARNING: could not download $name — photo analysis will be unavailable locally; e2e analysis tests will skip." >&2
   fi
   return 0
 }
 
 fetch_one "face_landmarker.task" \
   "$BASE/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
+fetch_one "pose_landmarker_full.task" \
+  "$BASE/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task"
 fetch_one "selfie_multiclass_256x256.tflite" \
   "$BASE/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite"
 exit 0

@@ -1,9 +1,15 @@
-import { FaceLandmarker, FilesetResolver, ImageSegmenter } from '@mediapipe/tasks-vision';
-import type { CategoryMask, FaceObservation } from './types';
+import {
+  FaceLandmarker,
+  FilesetResolver,
+  ImageSegmenter,
+  PoseLandmarker,
+} from '@mediapipe/tasks-vision';
+import type { CategoryMask, FaceObservation, PoseObservation } from './types';
 
 /** Self-hosted model and wasm locations (spec §4/§6: nothing fetched from third parties at runtime). */
 export const MODEL_URLS = {
   faceLandmarker: '/models/face_landmarker.task',
+  poseLandmarker: '/models/pose_landmarker_full.task',
   segmenter: '/models/selfie_multiclass_256x256.tflite',
   wasm: '/mediapipe/wasm',
 } as const;
@@ -11,6 +17,7 @@ export const MODEL_URLS = {
 export type ModelProgress = (fraction: number) => void;
 
 let landmarker: FaceLandmarker | null = null;
+let poseLandmarker: PoseLandmarker | null = null;
 let segmenter: ImageSegmenter | null = null;
 let loading: Promise<void> | null = null;
 
@@ -42,25 +49,32 @@ async function fetchWithProgress(
 }
 
 /**
- * Loads the face landmarker and the multiclass segmenter once. Progress spans both downloads.
- * Tries the GPU delegate first and falls back to CPU (headless/CI, old devices).
+ * Loads the face landmarker, the pose landmarker and the multiclass segmenter once. Progress spans the
+ * three downloads: the bytes loaded over their total, or the mean of each download's fraction while one
+ * has no content-length. Tries the GPU delegate first and falls back to CPU (headless/CI, old devices).
  */
 export function loadModels(onProgress?: ModelProgress): Promise<void> {
-  if (landmarker && segmenter) return Promise.resolve();
+  if (modelsReady()) return Promise.resolve();
   if (loading) return loading;
   loading = (async () => {
-    const progress = [0, 0];
-    const report = () => onProgress?.((progress[0]! + progress[1]!) / 2);
-    const [vision, landmarkerBytes, segmenterBytes] = await Promise.all([
+    const downloads = [0, 1, 2].map(() => ({ loaded: 0, total: 0 }));
+    const report = () => {
+      const known = downloads.every((d) => d.total > 0);
+      const sum = (key: 'loaded' | 'total') => downloads.reduce((s, d) => s + d[key], 0);
+      const fractions = downloads.reduce((s, d) => s + (d.total ? d.loaded / d.total : 0), 0);
+      const mean = fractions / downloads.length;
+      onProgress?.(known ? sum('loaded') / sum('total') : mean);
+    };
+    const fetchModel = (url: string, i: number) =>
+      fetchWithProgress(url, (loaded, total) => {
+        downloads[i] = { loaded, total };
+        report();
+      });
+    const [vision, landmarkerBytes, poseBytes, segmenterBytes] = await Promise.all([
       FilesetResolver.forVisionTasks(MODEL_URLS.wasm),
-      fetchWithProgress(MODEL_URLS.faceLandmarker, (l, t) => {
-        progress[0] = t ? l / t : 0;
-        report();
-      }),
-      fetchWithProgress(MODEL_URLS.segmenter, (l, t) => {
-        progress[1] = t ? l / t : 0;
-        report();
-      }),
+      fetchModel(MODEL_URLS.faceLandmarker, 0),
+      fetchModel(MODEL_URLS.poseLandmarker, 1),
+      fetchModel(MODEL_URLS.segmenter, 2),
     ]);
     const create = async (delegate: 'GPU' | 'CPU') => {
       const lm = await FaceLandmarker.createFromOptions(vision, {
@@ -70,15 +84,21 @@ export function loadModels(onProgress?: ModelProgress): Promise<void> {
         outputFaceBlendshapes: true,
         outputFacialTransformationMatrixes: true,
       });
+      const pose = await PoseLandmarker.createFromOptions(vision, {
+        baseOptions: { modelAssetBuffer: poseBytes, delegate },
+        runningMode: 'IMAGE',
+        numPoses: 4,
+        outputSegmentationMasks: false,
+      });
       const seg = await ImageSegmenter.createFromOptions(vision, {
         baseOptions: { modelAssetBuffer: segmenterBytes, delegate },
         runningMode: 'IMAGE',
         outputCategoryMask: true,
         outputConfidenceMasks: false,
       });
-      return { lm, seg };
+      return { lm, pose, seg };
     };
-    let created: { lm: FaceLandmarker; seg: ImageSegmenter };
+    let created: { lm: FaceLandmarker; pose: PoseLandmarker; seg: ImageSegmenter };
     try {
       created = await create('GPU');
     } catch (gpuError) {
@@ -86,6 +106,7 @@ export function loadModels(onProgress?: ModelProgress): Promise<void> {
       created = await create('CPU');
     }
     landmarker = created.lm;
+    poseLandmarker = created.pose;
     segmenter = created.seg;
     onProgress?.(1);
   })();
@@ -96,7 +117,7 @@ export function loadModels(onProgress?: ModelProgress): Promise<void> {
 }
 
 export function modelsReady(): boolean {
-  return Boolean(landmarker && segmenter);
+  return Boolean(landmarker && poseLandmarker && segmenter);
 }
 
 /** All detected faces, largest face box first. Requires loadModels() to have resolved. */
@@ -118,6 +139,22 @@ export function detectFaces(canvas: HTMLCanvasElement): FaceObservation[] {
   return faces.sort((a, b) => boxArea(b) - boxArea(a));
 }
 
+/** All detected poses (MediaPipe's order). Requires loadModels() to have resolved. */
+export function detectPoses(canvas: HTMLCanvasElement): PoseObservation[] {
+  if (!poseLandmarker) throw new Error('models not loaded');
+  const result = poseLandmarker.detect(canvas);
+  try {
+    return result.landmarks.map((landmarks, i) => ({
+      landmarks: landmarks.map((p) => ({ x: p.x, y: p.y, z: p.z, visibility: p.visibility })),
+      world: (result.worldLandmarks[i] ?? []).map((p) => ({ x: p.x, y: p.y, z: p.z })),
+      imageWidth: canvas.width,
+      imageHeight: canvas.height,
+    }));
+  } finally {
+    result.close();
+  }
+}
+
 /** Category mask (0..5) at the segmenter's working resolution. */
 export function segment(canvas: HTMLCanvasElement): CategoryMask {
   if (!segmenter) throw new Error('models not loaded');
@@ -133,8 +170,10 @@ export function segment(canvas: HTMLCanvasElement): CategoryMask {
 
 export function resetModelsForTests(): void {
   landmarker?.close();
+  poseLandmarker?.close();
   segmenter?.close();
   landmarker = null;
+  poseLandmarker = null;
   segmenter = null;
   loading = null;
 }

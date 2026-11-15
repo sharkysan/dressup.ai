@@ -6,10 +6,10 @@ export const strings = {
   webglUnsupported:
     "This browser can't show 3D. Please use a current version of Chrome, Firefox, Safari or Edge.",
   analysis: {
-    loadingModels: 'Preparing face analysis…',
+    loadingModels: 'Preparing photo analysis…',
     analysing: 'Analysing your photo…',
     noFace: "We couldn't find a face. Try a well-lit photo, facing the camera.",
-    faceTooSmall: 'The face is too small. Try a closer photo.',
+    faceTooSmall: 'The face is too small. Try a closer or higher-resolution photo.',
     faceTurned: 'Please face the camera more directly.',
     decodeFailed: "We couldn't read that image. Please use a JPEG or PNG.",
     modelsFailed: "The face analysis files didn't download. Check your connection and try again.",

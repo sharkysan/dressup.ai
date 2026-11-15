@@ -33,6 +33,7 @@ const base: AnalyzeResult = {
   mask: fx.mask,
   preview: document.createElement('canvas'),
   faceBox: box,
+  pose: null,
   likeness: null,
   likenessGate: 'too_small',
   likenessDebug: null,

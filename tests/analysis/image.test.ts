@@ -1,4 +1,11 @@
-import { cropFace, DecodeError, decodePhoto, fitWithin } from '../../src/analysis/image';
+import {
+  cropCanvas,
+  cropFace,
+  DecodeError,
+  decodePhoto,
+  fitWithin,
+} from '../../src/analysis/image';
+import { HEAD_CROP } from '../../src/analysis/pose';
 
 /** A stand-in ImageBitmap: its size and a spy on close(). */
 function fakeBitmap(width: number, height: number) {
@@ -89,4 +96,21 @@ test('cropFace scales a rect larger than maxEdge down to it', () => {
   expect(scale).toBeCloseTo(2048 / 4000, 12);
   expect([image.width, image.height]).toEqual([1536, 2048]);
   expect(drawImage).toHaveBeenCalledWith(bitmap, 500, 600, 3000, 4000, 0, 0, 1536, 2048);
+});
+
+test('cropCanvas draws the rect at full resolution when it fits', () => {
+  const { drawImage } = stubContext();
+  const bitmap = fakeBitmap(3000, 4000);
+  const canvas = cropCanvas(bitmap, { x: 1000.5, y: 400, width: 300, height: 300 });
+  expect([canvas.width, canvas.height]).toEqual([300, 300]);
+  expect(drawImage).toHaveBeenCalledWith(bitmap, 1000.5, 400, 300, 300, 0, 0, 300, 300);
+});
+
+test('cropCanvas scales a rect larger than the head crop’s maxEdge down to it', () => {
+  expect(HEAD_CROP.maxEdge).toBe(1024);
+  const { drawImage } = stubContext();
+  const bitmap = fakeBitmap(6000, 8000);
+  const canvas = cropCanvas(bitmap, { x: 500, y: 600, width: 2048, height: 2048 });
+  expect([canvas.width, canvas.height]).toEqual([1024, 1024]);
+  expect(drawImage).toHaveBeenCalledWith(bitmap, 500, 600, 2048, 2048, 0, 0, 1024, 1024);
 });
