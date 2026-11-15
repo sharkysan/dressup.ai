@@ -1,21 +1,27 @@
 import type { Catalog } from '../catalog/catalog';
-import type { AvatarParams } from '../catalog/params';
+import { avatarParamsSchema, defaultParams, HEIGHT_CM, type AvatarParams } from '../catalog/params';
 import { buildLikeness, type LikenessDebug } from '../likeness/buildLikeness';
 import { loadCorrespondence, type Correspondence } from '../likeness/correspondence';
 import type { Likeness } from '../likeness/types';
 import { strings } from '../ui/strings';
-import { cropFace, decodePhoto, DecodeError } from './image';
+import calibrationJson from './body-calibration.json';
+import { bodyCalibrationSchema, estimateMorphs, type BodyCalibration } from './body/estimate';
+import { checkBodyGate, type BodyGate } from './body/gate';
+import { headTopFactor, headTopY, measureBody, type BodyMeasurement } from './body/measure';
+import { cropCanvas, cropFace, decodePhoto, DecodeError } from './image';
 import { faceBox, headPose, toPixels } from './landmarks';
 import { analyzeToParams, type AnalysisDebug } from './mapping';
 import { hairRegion } from './mapping/hair';
 import { dilateMask, expandBox, maskForCrop, restrictToBox } from './masks';
-import { detectFaces, loadModels, segment, type ModelProgress } from './mediapipe';
+import { detectFaces, detectPoses, loadModels, segment, type ModelProgress } from './mediapipe';
+import { faceFromCrop, headCropRect, noseInBox, pickPose } from './pose';
 import {
   MASK,
   type Box,
   type CategoryMask,
   type FaceObservation,
   type Point2,
+  type PoseObservation,
   type RgbaImage,
 } from './types';
 
@@ -31,8 +37,8 @@ export class AnalysisError extends Error {
 }
 
 /**
- * Spec §6 gates on the chosen face. Hard gates: the face box ≥ `minFaceWidthPx` wide in the downscaled
- * image, |yaw| and |pitch| within their limits. The projection gate: the face box ≥
+ * Spec §6 gates on the chosen face. Hard gates: the face box ≥ `minFaceWidthPx` wide in the
+ * full-resolution photo, |yaw| and |pitch| within their limits. The projection gate: the face box ≥
  * `minProjectionFaceWidthPx` wide in the full-resolution photo, below which the analysis keeps the
  * default face (no Likeness).
  */
@@ -53,13 +59,17 @@ export const GATES = {
  */
 export const FACE_CROP = { expand: 1.6, hairDilatePx: 8 } as const;
 
+/** The body regression (spec §6), fitted by tools/calibrate-body.ts on renders of the avatar. */
+const BODY_CALIBRATION = bodyCalibrationSchema.parse(calibrationJson) as BodyCalibration;
+
 export type Adapter = {
   loadModels: typeof loadModels;
   loadCorrespondence: typeof loadCorrespondence;
   detectFaces: typeof detectFaces;
+  detectPoses: typeof detectPoses;
   segment: typeof segment;
 };
-const realAdapter: Adapter = { loadModels, loadCorrespondence, detectFaces, segment };
+const realAdapter: Adapter = { loadModels, loadCorrespondence, detectFaces, detectPoses, segment };
 
 export type AnalyzeResult = {
   params: AvatarParams;
@@ -68,6 +78,15 @@ export type AnalyzeResult = {
   mask: CategoryMask;
   preview: HTMLCanvasElement;
   faceBox: Box;
+  /** The pose whose nose lies in the chosen face's box (pickPose); null when none does. */
+  pose: PoseObservation | null;
+  /**
+   * The body gate on `pose` (spec §6), and the body measured on the photo when it is 'ok'. A pose that
+   * passes checkBodyGate but whose body measureBody can't measure, or whose features are not all finite
+   * and > 0, is 'not_visible' too, with no measurement. When the gate is 'ok', `params.body` is the
+   * calibration's estimate from the features; otherwise the default body (bodyParams).
+   */
+  body: { gate: BodyGate; measurement: BodyMeasurement | null };
   /** The photo face when likenessGate is 'ok'; otherwise null, and `params.face` is 'default'. */
   likeness: Likeness | null;
   /**
@@ -93,11 +112,14 @@ export function pickLargest(faces: FaceObservation[]): FaceObservation | undefin
   return best;
 }
 
-/** Throws face_too_small / face_turned per GATES. */
-export function applyGates(face: FaceObservation): void {
-  const box = faceBox(toPixels(face));
-  if (box.width < GATES.minFaceWidthPx) {
-    throw new AnalysisError('face_too_small', `face ${Math.round(box.width)} px wide`);
+/**
+ * Throws face_too_small / face_turned per GATES. `fullScale` is the full-resolution photo's width over
+ * the analysed image's, which the face's landmarks are normalised by.
+ */
+export function applyGates(face: FaceObservation, fullScale: number): void {
+  const width = faceBox(toPixels(face)).width * fullScale;
+  if (width < GATES.minFaceWidthPx) {
+    throw new AnalysisError('face_too_small', `face ${Math.round(width)} px wide`);
   }
   const pose = headPose(face.matrix);
   if (Math.abs(pose.yaw) > GATES.maxYawDeg || Math.abs(pose.pitch) > GATES.maxPitchDeg) {
@@ -110,16 +132,22 @@ export function applyGates(face: FaceObservation): void {
 
 /**
  * Photo → AvatarParams and the Likeness, entirely on the device: load models and correspondence →
- * decode → detect → largest face → gates → segment → map → (projection gate) → crop → likeness. Every
- * expected failure is an AnalysisError with a user-facing message (messageFor). A failure while building
- * the likeness does not reject: the params come back with the default face, `likeness: null` and
- * `likenessGate: 'failed'`. The full-resolution bitmap is closed whatever happens.
+ * decode → detect faces and poses (findFaces) → largest face → gates → its pose → segment → body gate
+ * and measurement → map → (projection gate) → crop → likeness. Every expected failure is an
+ * AnalysisError with a user-facing message (messageFor). A failure while building the likeness does
+ * not reject: the params come back with the default face, `likeness: null` and `likenessGate:
+ * 'failed'`. The full-resolution bitmap is closed whatever happens.
  */
 export async function analyzePhoto(
   file: Blob,
   opts: {
     catalog: Catalog | null;
     current?: AvatarParams;
+    /**
+     * The height the user entered (cm): `params.body.heightCm` (spec §6), clamped to HEIGHT_CM; the
+     * current one when it is missing or not finite.
+     */
+    heightCm?: number;
     onProgress?: ModelProgress;
     adapter?: Adapter;
   },
@@ -142,25 +170,63 @@ export async function analyzePhoto(
     throw cause;
   }
   try {
-    const faces = adapter.detectFaces(decoded.canvas);
+    const { faces, poses } = findFaces(adapter, decoded);
     const face = pickLargest(faces);
     if (!face) throw new AnalysisError('no_face');
-    applyGates(face);
-    const mask = adapter.segment(decoded.canvas);
+    const fullScale = decoded.bitmap.width / decoded.image.width;
+    applyGates(face, fullScale);
     const box = faceBox(toPixels(face));
-    const { params, debug } = analyzeToParams(
+    const pose = pickPose(poses, box);
+    const mask = adapter.segment(decoded.canvas);
+    const poseGate = checkBodyGate(pose);
+    const measured =
+      pose && poseGate === 'ok'
+        ? measureBody({
+            pose,
+            mask,
+            faceBox: box,
+            headTopY: headTopY(face, headTopFactor(corr)),
+            width: decoded.image.width,
+            height: decoded.image.height,
+          })
+        : null;
+    // No body to measure on a pose that passed, or a ratio that isn't one (0 or not finite: spec §6,
+    // body.*): the default body, as for a hidden one.
+    const measurement =
+      measured && Object.values(measured.features).every((v) => Number.isFinite(v) && v > 0)
+        ? measured
+        : null;
+    const gate: BodyGate = poseGate === 'ok' && !measurement ? 'not_visible' : poseGate;
+    const mapped = analyzeToParams(
       { face, mask, image: decoded.image, faceBox: box },
       {
         catalog: opts.catalog,
         current: opts.current,
       },
     );
-    const result = { debug, face, mask, preview: decoded.canvas, faceBox: box };
-    const fullWidth = (box.width * decoded.bitmap.width) / decoded.image.width;
-    if (fullWidth < GATES.minProjectionFaceWidthPx) {
+    const body = bodyParams(opts.current, opts.heightCm);
+    const params = {
+      ...mapped.params,
+      body: measurement
+        ? { ...body, ...estimateMorphs(measurement.features, body.gender, BODY_CALIBRATION) }
+        : body,
+    };
+    /** The params returned, with `face`: the analysis output is validated (spec §5), the body too. */
+    const output = (face: AvatarParams['face']): AvatarParams =>
+      avatarParamsSchema.parse({ ...params, face });
+    const result = {
+      debug: mapped.debug,
+      face,
+      mask,
+      preview: decoded.canvas,
+      faceBox: box,
+      pose,
+      body: { gate, measurement },
+    };
+    if (box.width * fullScale < GATES.minProjectionFaceWidthPx) {
       return {
         ...result,
-        params: { ...params, face: 'default' },
+        params: output('default'),
         likeness: null,
         likenessGate: 'too_small',
         likenessDebug: null,
@@ -175,7 +241,7 @@ export async function analyzePhoto(
       console.warn("analyzePhoto: couldn't build the photo face; using the default face");
       return {
         ...result,
-        params: { ...params, face: 'default' },
+        params: output('default'),
         likeness: null,
         likenessGate: 'failed',
         likenessDebug: null,
@@ -183,7 +249,7 @@ export async function analyzePhoto(
     }
     return {
       ...result,
-      params: { ...params, face: 'photo' },
+      params: output('photo'),
       likeness: built.likeness,
       likenessGate: 'ok',
       likenessDebug: built.debug,
@@ -191,6 +257,47 @@ export async function analyzePhoto(
   } finally {
     decoded.bitmap.close();
   }
+}
+
+/**
+ * The body the analysis returns without a measurement (spec §6): every morph 0, the current gender
+ * (never inferred) and the height entered, clamped to HEIGHT_CM; the current height when none is
+ * entered or it is not finite.
+ */
+function bodyParams(
+  current: AvatarParams | undefined,
+  heightCm: number | undefined,
+): AvatarParams['body'] {
+  const body = (current ?? defaultParams).body;
+  const height =
+    heightCm !== undefined && Number.isFinite(heightCm)
+      ? Math.min(HEIGHT_CM.max, Math.max(HEIGHT_CM.min, heightCm))
+      : body.heightCm;
+  return { ...defaultParams.body, gender: body.gender, heightCm: height };
+}
+
+/**
+ * Every face and pose found on the photo (spec §6). FaceLandmarker and PoseLandmarker run on the
+ * analysed copy; then, for each pose whose nose no face found so far covers, FaceLandmarker runs again on
+ * its head crop of the full-resolution photo (HEAD_CROP), and the faces found there are mapped back into
+ * the analysed image's coordinates.
+ */
+function findFaces(
+  adapter: Adapter,
+  decoded: { canvas: HTMLCanvasElement; image: RgbaImage; bitmap: ImageBitmap },
+): { faces: FaceObservation[]; poses: PoseObservation[] } {
+  const faces = [...adapter.detectFaces(decoded.canvas)];
+  const poses = adapter.detectPoses(decoded.canvas);
+  const full = { width: decoded.bitmap.width, height: decoded.bitmap.height };
+  const analysed = { width: decoded.image.width, height: decoded.image.height };
+  for (const pose of poses) {
+    if (faces.some((f) => noseInBox(pose, faceBox(toPixels(f))))) continue;
+    const rect = headCropRect(pose, full);
+    for (const found of adapter.detectFaces(cropCanvas(decoded.bitmap, rect))) {
+      faces.push(faceFromCrop(found, rect, full, analysed));
+    }
+  }
+  return { faces, poses };
 }
 
 /**

@@ -8,6 +8,7 @@ import { applyLikeness, expandHeadOffsets } from '../likeness/likenessMorph';
 import type { Likeness } from '../likeness/types';
 import { useAppStore } from '../store/useAppStore';
 import { applyParams, type ApplyContext } from './applyParams';
+import { getAvatarVrm, setAvatarVrm } from './avatarHandle';
 import {
   BASE_LAYER_URL,
   BASE_META_URL,
@@ -25,7 +26,8 @@ type Avatar = { vrm: VRM; ctx: ApplyContext; corr: Correspondence };
 /**
  * Loads a VRM with its base metadata, base layer and correspondence, reports status to the store,
  * applies AvatarParams and the likeness whenever they change, mounts the hairstyle, and ticks the VRM
- * every frame. Mount with `key={url}` so a URL change remounts.
+ * every frame. The VRM is published on the avatar handle while ready. Mount with `key={url}` so a URL
+ * change remounts.
  */
 export function AvatarModel({ url }: { url: string }) {
   const [avatar, setAvatar] = useState<Avatar | null>(null);
@@ -55,6 +57,7 @@ export function AvatarModel({ url }: { url: string }) {
         applied.current = params;
         setAvatarMetrics(measure(vrm, params.body.heightCm));
         setAvatar(loaded);
+        setAvatarVrm(vrm);
         setAvatarStatus('ready');
       })
       .catch((error: unknown) => {
@@ -67,6 +70,7 @@ export function AvatarModel({ url }: { url: string }) {
     return () => {
       cancelled = true;
       if (!loaded) return;
+      if (getAvatarVrm() === loaded.vrm) setAvatarVrm(null);
       loaded.ctx.skin.dispose();
       loaded.ctx.eyes.dispose();
       disposeVrm(loaded.vrm);

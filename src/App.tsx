@@ -8,6 +8,7 @@ import { Viewer } from './scene/Viewer';
 import { getViewerHandle, nodeScreenPoint } from './scene/viewerHandle';
 import { useAppStore } from './store/useAppStore';
 import { AnalysisPage } from './ui/dev/AnalysisPage';
+import { calibrationHook } from './ui/dev/calibrationHook';
 import { isAnalysisRoute, isDevPanelEnabled } from './ui/dev/devFlag';
 import { ParamsPanel } from './ui/dev/ParamsPanel';
 import { ExportButton } from './ui/ExportButton';
@@ -29,6 +30,11 @@ declare global {
         set(likeness: Likeness | null): void;
         status(): { meshes: string[]; browsVisible: boolean };
       };
+      /**
+       * Dev/e2e: the body calibration's renders — lowers the arms, renders the scene as a PNG, and
+       * analyses a full-length render of the avatar with a given body and skin.
+       */
+      calibration: typeof calibrationHook;
     };
   }
 }
@@ -51,6 +57,7 @@ export default function App() {
         analysis: { analyzePhoto, loadModels },
         nodeScreenPoint,
         likeness: likenessHook,
+        calibration: calibrationHook,
       };
     }
   }, [dev]);

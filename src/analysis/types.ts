@@ -16,6 +16,20 @@ export type FaceObservation = {
   imageHeight: number;
 };
 
+/** A pose landmark: normalised like a face landmark, with MediaPipe's visibility (0..1). */
+export type PoseLandmark = Point3 & { visibility: number };
+
+/**
+ * One person's pose from PoseLandmarker: 33 `landmarks` normalised like the face's (z shares x's scale),
+ * and the same 33 points in `world`, MediaPipe's metric frame centred between the hips.
+ */
+export type PoseObservation = {
+  landmarks: PoseLandmark[];
+  world: Point3[];
+  imageWidth: number;
+  imageHeight: number;
+};
+
 /** MediaPipe multiclass selfie segmentation categories. */
 export const MASK = {
   background: 0,

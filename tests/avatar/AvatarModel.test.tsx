@@ -2,6 +2,7 @@ import type { VRM } from '@pixiv/three-vrm';
 import { act, render } from '@testing-library/react';
 import { Group } from 'three';
 import { applyParams } from '../../src/avatar/applyParams';
+import { getAvatarVrm } from '../../src/avatar/avatarHandle';
 import { AvatarModel } from '../../src/avatar/AvatarModel';
 import type { BaseMeta } from '../../src/avatar/baseContract';
 import { decodeImageData, type FaceComposite } from '../../src/avatar/bodyTexture';
@@ -142,6 +143,20 @@ test('params set as the avatar becomes ready, before the store subscription exis
   expect(useAppStore.getState().avatarStatus).toBe('ready');
   const applied = vi.mocked(applyParams).mock.calls.map(([, params]) => params.skin);
   expect(applied.at(-1)).toBe('#123456');
+});
+
+test('the avatar handle holds the loaded VRM once ready, and null after unmount', async () => {
+  const vrm = { scene: new Group(), humanoid: null, update: () => undefined } as unknown as VRM;
+  vi.mocked(loadVrm).mockResolvedValue(vrm);
+  expect(getAvatarVrm()).toBeNull();
+  let unmount!: () => void;
+  await act(async () => {
+    ({ unmount } = render(<AvatarModel url="/base.vrm" />));
+  });
+  expect(useAppStore.getState().avatarStatus).toBe('ready');
+  expect(getAvatarVrm()).toBe(vrm);
+  act(() => unmount());
+  expect(getAvatarVrm()).toBeNull();
 });
 
 test('later changes apply once each, and an unchanged store applies nothing again', async () => {

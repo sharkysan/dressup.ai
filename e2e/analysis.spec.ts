@@ -3,12 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PNG } from 'pngjs';
 import { strings } from '../src/ui/strings';
+import { skipWithoutModels } from './helpers/models';
 
-const MODELS_DIR = path.resolve('public/models');
 const PHOTOS_DIR = path.resolve('e2e/fixtures/photos');
-const modelsPresent =
-  fs.existsSync(path.join(MODELS_DIR, 'face_landmarker.task')) &&
-  fs.existsSync(path.join(MODELS_DIR, 'selfie_multiclass_256x256.tflite'));
 
 /** A flat mid-grey image: decodes fine, contains no face. */
 function blankPng(size = 512): Buffer {
@@ -54,8 +51,9 @@ test('a failed model download shows the friendly message with retry', async ({ p
 });
 
 test.describe('with models', () => {
-  // Models are fetched by `npm run assets:models` (CI) and git-ignored; skip, don't fail, where absent.
-  test.skip(!modelsPresent, 'MediaPipe models not present under public/models');
+  skipWithoutModels();
+  // Under software WebGL each model's first run compiles its shaders: ~10–15 s apiece.
+  test.describe.configure({ timeout: 150_000 });
 
   test('a photo without a face is rejected with guidance', async ({ page }) => {
     await page.goto('/#analysis');
@@ -68,7 +66,7 @@ test.describe('with models', () => {
       buffer: blankPng(),
     });
     const status = page.getByTestId('analysis-status');
-    await expect(status).toHaveAttribute('data-analysis', 'error', { timeout: 60_000 });
+    await expect(status).toHaveAttribute('data-analysis', 'error', { timeout: 90_000 });
     await expect(status).toHaveText(strings.analysis.noFace);
   });
 
@@ -82,12 +80,23 @@ test.describe('with models', () => {
     await expect(page.getByTestId('viewer')).toHaveAttribute('data-status', 'ready', {
       timeout: 45_000,
     });
+    await page.getByTestId('height-input').fill('172');
     await page.getByTestId('photo-input').setInputFiles(path.join(PHOTOS_DIR, photo!));
     const status = page.getByTestId('analysis-status');
     await expect(status).toHaveAttribute('data-analysis', 'done', { timeout: 90_000 });
     const params = await page.evaluate(() => window.__kiss!.store.getState().params);
     expect(params.version).toBe(2);
     expect(params.skin).toMatch(/^#[0-9a-f]{6}$/i);
+
+    // The body: one of the four gate lines, the entered height, every morph in range.
+    expect(Object.values<string>(strings.analysis.bodyGate)).toContain(
+      await page.getByTestId('body-gate').textContent(),
+    );
+    expect(params.body.heightCm).toBe(172);
+    for (const [key, value] of Object.entries(params.body)) {
+      if (key === 'heightCm') continue;
+      expect(Math.abs(value)).toBeLessThanOrEqual(1);
+    }
 
     // The photo face, when the face passes the projection gate (≥ 256 px wide at full resolution).
     const gate = await page.getByTestId('likeness-gate').textContent();

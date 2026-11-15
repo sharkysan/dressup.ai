@@ -1,3 +1,4 @@
+import { HEAD_CROP } from './pose';
 import type { Box, RgbaImage } from './types';
 
 export const MAX_EDGE = 1024;
@@ -73,4 +74,24 @@ export function cropFace(
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(bitmap, rect.x, rect.y, rect.width, rect.height, 0, 0, width, height);
   return { image: { width, height, data: ctx.getImageData(0, 0, width, height).data }, scale };
+}
+
+/**
+ * `rect` (full-resolution pixels) of the photo drawn on a canvas, for FaceLandmarker: at full resolution,
+ * or scaled down where its longer edge would pass `maxEdge`. It never scales up.
+ */
+export function cropCanvas(
+  bitmap: ImageBitmap,
+  rect: Box,
+  maxEdge: number = HEAD_CROP.maxEdge,
+): HTMLCanvasElement {
+  const { width, height } = fitWithin(rect.width, rect.height, maxEdge);
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('cropCanvas: no 2d context');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bitmap, rect.x, rect.y, rect.width, rect.height, 0, 0, width, height);
+  return canvas;
 }

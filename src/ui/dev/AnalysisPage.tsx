@@ -5,6 +5,9 @@ import {
   messageFor,
   type AnalyzeResult,
 } from '../../analysis/analyze';
+import type { BodyGate } from '../../analysis/body/gate';
+import { BODY_FEATURES } from '../../analysis/body/measure';
+import { BODY_MORPHS } from '../../catalog/params';
 import { downloadBlob } from '../../export/download';
 import { loadCorrespondence } from '../../likeness/correspondence';
 import { FACE_TEXTURE_SIZE } from '../../likeness/faceTexture';
@@ -28,16 +31,25 @@ export function AnalysisPage() {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalyzeResult | null>(null);
+  const [heightText, setHeightText] = useState(() =>
+    String(useAppStore.getState().params.body.heightCm),
+  );
   const lastFile = useRef<File | null>(null);
 
   async function run(file: File) {
     lastFile.current = file;
+    const typed = Number(heightText);
+    const heightCm =
+      heightText.trim() !== '' && Number.isFinite(typed)
+        ? Math.min(210, Math.max(140, typed))
+        : useAppStore.getState().params.body.heightCm;
     setStatus('loading');
     setError(null);
     try {
       const res = await analyzePhoto(file, {
         catalog,
         current: params,
+        heightCm,
         onProgress: (f) => {
           setProgress(f);
           if (f >= 1) setStatus('analysing');
@@ -50,7 +62,12 @@ export function AnalysisPage() {
     } catch (e) {
       setStatus('error');
       setError(e instanceof AnalysisError ? messageFor(e.code) : String(e));
-      console.warn('analysis failed:', e);
+      // Spec §3: no measurements in logs. An AnalysisError's message holds the face's width in px or
+      // its yaw and pitch, so only its code is logged; any other error, its message, not the object.
+      console.warn(
+        'analysis failed:',
+        e instanceof AnalysisError ? e.code : e instanceof Error ? e.message : String(e),
+      );
     }
   }
 
@@ -65,6 +82,8 @@ export function AnalysisPage() {
       },
       image: { width: result.preview.width, height: result.preview.height },
       faceBox: result.faceBox,
+      pose: result.pose,
+      body: { gate: result.body.gate },
       params: result.params,
       debug: result.debug,
     };
@@ -98,6 +117,18 @@ export function AnalysisPage() {
     >
       <section style={{ overflow: 'auto', fontFamily: 'system-ui, sans-serif', fontSize: 13 }}>
         <h2 style={{ margin: '0 0 8px', fontSize: 16 }}>Analysis debug</h2>
+        <label style={{ display: 'block', margin: '0 0 6px' }}>
+          Height (cm){' '}
+          <input
+            data-testid="height-input"
+            type="number"
+            min={140}
+            max={210}
+            value={heightText}
+            onChange={(e) => setHeightText(e.target.value)}
+            style={{ width: 70 }}
+          />
+        </label>
         <input
           data-testid="photo-input"
           type="file"
@@ -127,7 +158,10 @@ export function AnalysisPage() {
               face={result.face}
               mask={result.mask}
               faceBox={result.faceBox}
+              pose={result.pose}
+              measurement={result.body.measurement}
             />
+            <BodyPanel result={result} />
             <Attributes result={result} />
             <LikenessPanel result={result} />
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
@@ -199,6 +233,38 @@ function Attributes({ result }: { result: AnalyzeResult }) {
             </li>
           ))}
         </ol>
+      </div>
+    </div>
+  );
+}
+
+/** The body gate's line (a Record, so a new outcome needs its line). */
+const BODY_GATE_LINES: Record<BodyGate, string> = strings.analysis.bodyGate;
+
+/** The body: the gate, with a measurement its ten ratios, and the body parameters the analysis chose. */
+function BodyPanel({ result }: { result: AnalyzeResult }) {
+  const { gate, measurement } = result.body;
+  const { body } = result.params;
+  return (
+    <div style={{ marginTop: 10 }}>
+      <b>Body</b>
+      <div data-testid="body-gate">{BODY_GATE_LINES[gate]}</div>
+      {measurement && (
+        <div style={{ marginTop: 4 }}>
+          {BODY_FEATURES.map((f) => (
+            <div key={f} data-testid={`feature-${f}`}>
+              {f} {measurement.features[f].toFixed(3)}
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ marginTop: 4 }}>
+        {BODY_MORPHS.map((m) => (
+          <div key={m} data-testid={`body-morph-${m}`}>
+            {m} {body[m].toFixed(2)}
+          </div>
+        ))}
+        <div>heightCm {body.heightCm}</div>
       </div>
     </div>
   );

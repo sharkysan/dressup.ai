@@ -7,30 +7,50 @@ import {
   messageFor,
   pickLargest,
 } from '../../src/analysis/analyze';
+import calibrationJson from '../../src/analysis/body-calibration.json';
+import {
+  bodyCalibrationSchema,
+  estimateMorphs,
+  type BodyCalibration,
+} from '../../src/analysis/body/estimate';
+import { checkBodyGate } from '../../src/analysis/body/gate';
+import { headTopFactor, headTopY, measureBody } from '../../src/analysis/body/measure';
 import { DecodeError } from '../../src/analysis/image';
-import { faceBox, toPixels } from '../../src/analysis/landmarks';
+import { faceBox, LM, toPixels } from '../../src/analysis/landmarks';
 import { dilateMask, expandBox, maskForCrop } from '../../src/analysis/masks';
-import { MASK, type Box, type FaceObservation } from '../../src/analysis/types';
-import { avatarParamsSchema } from '../../src/catalog/params';
-import type { Correspondence } from '../../src/likeness/correspondence';
+import { faceFromCrop, headCropRect, POSE, posePixels } from '../../src/analysis/pose';
+import {
+  MASK,
+  type Box,
+  type CategoryMask,
+  type FaceObservation,
+  type Point2,
+  type PoseObservation,
+  type RgbaImage,
+} from '../../src/analysis/types';
+import { avatarParamsSchema, defaultParams } from '../../src/catalog/params';
 import type { Likeness } from '../../src/likeness/types';
 import { strings } from '../../src/ui/strings';
+import { headCorrespondence, synthBody } from '../../tools/test-fixtures/body';
 import { synthFace } from '../../tools/test-fixtures/canonicalFace';
 
 vi.mock('../../src/analysis/image', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../../src/analysis/image')>();
-  return { ...mod, decodePhoto: vi.fn(), cropFace: vi.fn() };
+  return { ...mod, decodePhoto: vi.fn(), cropFace: vi.fn(), cropCanvas: vi.fn() };
 });
 vi.mock('../../src/likeness/buildLikeness', () => ({ buildLikeness: vi.fn() }));
-import { cropFace, decodePhoto } from '../../src/analysis/image';
+import { cropCanvas, cropFace, decodePhoto } from '../../src/analysis/image';
 import { buildLikeness } from '../../src/likeness/buildLikeness';
 
 const fx = synthFace();
 const blob = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' });
 /** The synthetic face's width in the analysed image (≈ 184 px). */
 const ANALYSED_WIDTH = faceBox(toPixels(fx.face)).width;
-/** Stands in for the correspondence: analyzePhoto only hands it on to buildLikeness (mocked). */
-const CORR = { version: 1 } as unknown as Correspondence;
+/**
+ * Stands in for the correspondence: analyzePhoto reads the head's proportion from it (headTopFactor)
+ * and hands it on to buildLikeness (mocked).
+ */
+const CORR = headCorrespondence();
 const LIKENESS: Likeness = {
   version: 1,
   faceTexture: new Blob([new Uint8Array([1])], { type: 'image/webp' }),
@@ -52,27 +72,67 @@ function adapter(
     loadModels: vi.fn().mockResolvedValue(undefined),
     loadCorrespondence: vi.fn().mockResolvedValue(CORR),
     detectFaces: vi.fn().mockReturnValue(faces),
+    detectPoses: vi.fn().mockReturnValue([]),
     segment: vi.fn().mockReturnValue(fx.mask),
     ...overrides,
   };
 }
 
 /**
- * decodePhoto's result for fx's 640×800 analysed image, from a full-resolution photo `k` times its size,
- * so the face is k × ANALYSED_WIDTH wide at full resolution.
+ * decodePhoto's result for an analysed image (fx's 640×800 by default), from a full-resolution photo `k`
+ * times its size, so fx's face is k × ANALYSED_WIDTH wide at full resolution.
  */
-function decodedAt(k: number) {
+function decodedAt(k: number, image: RgbaImage = fx.image) {
   const bitmap = {
-    width: Math.round(fx.image.width * k),
-    height: Math.round(fx.image.height * k),
+    width: Math.round(image.width * k),
+    height: Math.round(image.height * k),
     close: vi.fn(),
   };
   vi.mocked(decodePhoto).mockResolvedValue({
     canvas: document.createElement('canvas'),
-    image: fx.image,
+    image,
     bitmap: bitmap as unknown as ImageBitmap,
   });
   return bitmap;
+}
+
+/** A synthetic face `width` px wide in the analysed image, with its own mask and pixels. */
+const faceOfWidth = (width: number) => synthFace({ scale: (12 * width) / ANALYSED_WIDTH });
+
+/**
+ * A pose in fx's 640×800 analysed image: landmarks 0–10 about `nose` (analysed pixels), the ears (7, 8)
+ * `ear` px apart and level, the body below; every landmark visible.
+ */
+function poseAt(nose: Point2, ear = 20): PoseObservation {
+  const { width, height } = fx.image;
+  const head = (i: number): Point2 => {
+    if (i === 7) return { x: nose.x + ear / 2, y: nose.y };
+    if (i === 8) return { x: nose.x - ear / 2, y: nose.y };
+    if (i === 0) return nose;
+    // Six eye points above the nose and two mouth points below, in mirror pairs: their mean is the nose.
+    const side = i % 2 === 0 ? 1 : -1;
+    return { x: nose.x + side * (ear / 4), y: nose.y + (i >= 9 ? (3 * ear) / 4 : -ear / 4) };
+  };
+  const landmarks = Array.from({ length: 33 }, (_, i) => {
+    const p = i <= 10 ? head(i) : { x: nose.x, y: nose.y + i * ear };
+    return { x: p.x / width, y: p.y / height, z: 0, visibility: 1 };
+  });
+  return {
+    landmarks,
+    world: landmarks.map(() => ({ x: 0, y: 0, z: 0 })),
+    imageWidth: width,
+    imageHeight: height,
+  };
+}
+
+/** cropCanvas as it would crop at scale 1: a canvas of the rect's size. */
+function canvasCrop() {
+  vi.mocked(cropCanvas).mockImplementation((_bitmap, rect) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(rect.width);
+    canvas.height = Math.round(rect.height);
+    return canvas;
+  });
 }
 
 /** cropFace as it would crop: the rect (integers) at `scale`, blank pixels. */
@@ -87,6 +147,8 @@ function cropAt(scale = 1) {
 beforeEach(() => {
   decodedAt(1);
   cropAt(1);
+  vi.mocked(cropCanvas).mockReset();
+  canvasCrop();
   vi.mocked(buildLikeness).mockReset();
   vi.mocked(buildLikeness).mockResolvedValue({ likeness: LIKENESS, debug: LIKENESS_DEBUG });
 });
@@ -114,26 +176,291 @@ test('no faces → no_face', async () => {
 
 test('a 60 px face → face_too_small', () => {
   const small = synthFace({ scale: 60 / 15.3 }).face; // face width ≈ 60 px
-  expect(() => applyGates(small)).toThrow(AnalysisError);
+  expect(() => applyGates(small, 1)).toThrow(AnalysisError);
   try {
-    applyGates(small);
+    applyGates(small, 1);
   } catch (e) {
     expect((e as AnalysisError).code).toBe('face_too_small');
   }
 });
 
+test('the 120 px gate is on the face’s width at full resolution', () => {
+  expect(GATES.minFaceWidthPx).toBe(120);
+  const face = faceOfWidth(70).face;
+  expect(() => applyGates(face, 2)).not.toThrow();
+  expect(() => applyGates(face, 1.5)).toThrow(expect.objectContaining({ code: 'face_too_small' }));
+});
+
 test('a 40° yaw → face_turned', () => {
   const turned = synthFace({ yawDeg: 40 }).face;
-  expect(() => applyGates(turned)).toThrow(/turned/);
+  expect(() => applyGates(turned, 1)).toThrow(/turned/);
 });
 
 test('a 25° yaw or pitch → face_turned (the gate is 20°)', () => {
   expect(GATES.maxYawDeg).toBe(20);
   expect(GATES.maxPitchDeg).toBe(20);
   for (const turned of [synthFace({ yawDeg: 25 }).face, synthFace({ pitchDeg: 25 }).face]) {
-    expect(() => applyGates(turned)).toThrow(expect.objectContaining({ code: 'face_turned' }));
+    expect(() => applyGates(turned, 1)).toThrow(expect.objectContaining({ code: 'face_turned' }));
   }
-  expect(() => applyGates(synthFace({ yawDeg: 15 }).face)).not.toThrow();
+  expect(() => applyGates(synthFace({ yawDeg: 15 }).face, 1)).not.toThrow();
+});
+
+describe('the 120 px gate at full resolution, on a photo 2× the analysed size', () => {
+  test.each([
+    ['passes', 70, null],
+    ['is rejected with face_too_small', 50, 'face_too_small'],
+  ] as const)('a face %s when %i px wide in the analysed image', async (_, width, code) => {
+    const small = faceOfWidth(width);
+    expect(faceBox(toPixels(small.face)).width).toBeCloseTo(width, 6);
+    decodedAt(2, small.image);
+    const a = adapter([small.face], { segment: vi.fn().mockReturnValue(small.mask) });
+    const analysis = analyzePhoto(blob, { catalog: null, adapter: a });
+    if (code) {
+      await expect(analysis).rejects.toMatchObject({ code });
+    } else {
+      const result = await analysis;
+      expect(result.face).toBe(small.face);
+      expect(result.likenessGate).toBe('too_small'); // 140 px < the projection gate's 256
+    }
+  });
+});
+
+describe('poses and the head crop', () => {
+  /** fx's nose, in analysed pixels. */
+  const fxNose = toPixels(fx.face)[LM.noseBottom]!;
+
+  test('a face found only on the head crop is mapped back into the photo', async () => {
+    const bitmap = decodedAt(4);
+    const full = { width: bitmap.width, height: bitmap.height };
+    const pose = poseAt({ x: 320, y: 180 }); // ears 80 px apart at full resolution
+    const rect = headCropRect(pose, full);
+    // In the crop: a face 140 px wide at its centre, the mean of the pose's head landmarks.
+    const inCrop = synthFace({
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      scale: (12 * 140) / ANALYSED_WIDTH,
+    }).face;
+    const detectFaces = vi.fn().mockReturnValueOnce([]).mockReturnValueOnce([inCrop]);
+    const a = adapter([], { detectFaces, detectPoses: vi.fn().mockReturnValue([pose]) });
+
+    const result = await analyzePhoto(blob, { catalog: null, adapter: a });
+
+    expect(cropCanvas).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(cropCanvas).mock.calls[0]).toEqual([bitmap, headCropRect(pose, full)]);
+    expect(detectFaces).toHaveBeenCalledTimes(2);
+    expect(detectFaces.mock.calls[1]![0]).toBe(vi.mocked(cropCanvas).mock.results[0]!.value);
+    const analysed = { width: fx.image.width, height: fx.image.height };
+    expect(result.face).toEqual(faceFromCrop(inCrop, rect, full, analysed));
+    expect(result.faceBox.width * 4).toBeCloseTo(140, 6);
+    expect(result.pose).toBe(pose);
+    expect(result.likenessGate).toBe('too_small');
+  });
+
+  test('a pose whose nose lies inside a whole-image face gets no crop', async () => {
+    const pose = poseAt(fxNose);
+    const a = adapter(fx.faces, { detectPoses: vi.fn().mockReturnValue([pose]) });
+    const result = await analyzePhoto(blob, { catalog: null, adapter: a });
+    expect(a.detectFaces).toHaveBeenCalledTimes(1);
+    expect(cropCanvas).not.toHaveBeenCalled();
+    expect(result.face).toBe(fx.face);
+    expect(result.pose).toBe(pose);
+  });
+
+  test('no face on the whole image or the head crop → no_face', async () => {
+    const a = adapter([], { detectPoses: vi.fn().mockReturnValue([poseAt({ x: 320, y: 180 })]) });
+    await expect(analyzePhoto(blob, { catalog: null, adapter: a })).rejects.toMatchObject({
+      code: 'no_face',
+    });
+    expect(a.detectFaces).toHaveBeenCalledTimes(2);
+  });
+
+  test('the chosen pose is the one under the chosen face, and null without poses', async () => {
+    const under = poseAt(fxNose);
+    const elsewhere = poseAt({ x: 80, y: 120 });
+    const detectFaces = vi.fn().mockReturnValueOnce(fx.faces).mockReturnValue([]);
+    const a = adapter([], {
+      detectFaces,
+      detectPoses: vi.fn().mockReturnValue([elsewhere, under]),
+    });
+    const result = await analyzePhoto(blob, { catalog: null, adapter: a });
+    expect(result.pose).toBe(under);
+    // Only the other pose was cropped, and its crop held no face.
+    expect(cropCanvas).toHaveBeenCalledTimes(1);
+    expect(detectFaces).toHaveBeenCalledTimes(2);
+    expect(result.face).toBe(fx.face);
+
+    expect((await analyzePhoto(blob, { catalog: null, adapter: adapter() })).pose).toBeNull();
+  });
+});
+
+describe('the body gate and the body measurement', () => {
+  /** A full-length figure in a 640×800 analysed image, and a face over its head. */
+  const figure = synthBody({ width: 640, height: 800, centreX: 320, headTopY: 60, heightPx: 680 });
+  const head = figure.faceBox;
+  const person = synthFace({
+    centre: { x: head.x + head.width / 2, y: head.y + head.height / 2 },
+    scale: (12 * head.width) / ANALYSED_WIDTH,
+  });
+  const current = {
+    ...defaultParams,
+    body: { ...defaultParams.body, heightCm: 170, gender: 0.7, weight: 0.5, hips: -0.4 },
+  };
+
+  function analyse(pose: PoseObservation, heightCm?: number, mask: CategoryMask = figure.mask) {
+    // The face 300 px wide at full resolution: past the projection gate.
+    decodedAt(300 / faceBox(toPixels(person.face)).width, person.image);
+    const a = adapter([person.face], {
+      detectPoses: vi.fn().mockReturnValue([pose]),
+      segment: vi.fn().mockReturnValue(mask),
+    });
+    return analyzePhoto(blob, { catalog: null, current, heightCm, adapter: a });
+  }
+
+  test("gate 'ok': the body is measured, and params.body is its estimate at the entered height", async () => {
+    const result = await analyse(figure.pose, 180);
+    expect(result.pose).toBe(figure.pose);
+    expect(result.body.gate).toBe('ok');
+    expect(result.body.measurement).not.toBeNull();
+    // The head top from the face's landmarks and the base's head proportion (spec §6).
+    expect(result.body.measurement!.headTopY).toBeCloseTo(
+      headTopY(person.face, headTopFactor(CORR)),
+      9,
+    );
+    // The shipped calibration's morphs for the measured features and the current gender; the current
+    // gender itself (never inferred) and the height entered.
+    const cal = bodyCalibrationSchema.parse(calibrationJson) as BodyCalibration;
+    const morphs = estimateMorphs(result.body.measurement!.features, 0.7, cal);
+    expect(result.params.body).toEqual({ ...morphs, gender: 0.7, heightCm: 180 });
+    expect(Object.values(morphs).some((v) => v !== 0)).toBe(true);
+    expect(avatarParamsSchema.safeParse(result.params).success).toBe(true);
+    expect(result.likenessGate).toBe('ok');
+  });
+
+  test("a zero width (the upper arms labelled 'others', as a sleeve can be) → not_visible and the default body", async () => {
+    // The mid-upper-arm points, where the upper-arm width is walked from, are not body.
+    const data = figure.mask.data.slice();
+    const at = posePixels(figure.pose);
+    for (const [shoulder, elbow] of [
+      [POSE.shoulderL, POSE.elbowL],
+      [POSE.shoulderR, POSE.elbowR],
+    ] as const) {
+      const cx = Math.floor((at[shoulder]!.x + at[elbow]!.x) / 2);
+      const cy = Math.floor((at[shoulder]!.y + at[elbow]!.y) / 2);
+      for (let y = cy - 2; y <= cy + 2; y++) {
+        for (let x = cx - 2; x <= cx + 2; x++) data[y * figure.mask.width + x] = MASK.others;
+      }
+    }
+    const mask = { ...figure.mask, data };
+    // measureBody measures the body, but its upper-arm width is 0.
+    const measured = measureBody({
+      pose: figure.pose,
+      mask,
+      faceBox: faceBox(toPixels(person.face)),
+      headTopY: headTopY(person.face, headTopFactor(CORR)),
+      width: person.image.width,
+      height: person.image.height,
+    });
+    expect(measured!.features.upperArmWidth).toBe(0);
+    expect(measured!.features.waistWidth).toBeGreaterThan(0);
+
+    const result = await analyse(figure.pose, 180, mask);
+    expect(checkBodyGate(figure.pose)).toBe('ok');
+    expect(result.body).toEqual({ gate: 'not_visible', measurement: null });
+    expect(result.params.body).toEqual({ ...defaultParams.body, gender: 0.7, heightCm: 180 });
+    expect(result.likenessGate).toBe('ok');
+  });
+
+  test('both wrists between the hips (hands clasped in front) → not_visible: the default body and no measurement', async () => {
+    const at = posePixels(figure.pose);
+    const midX = (at[POSE.hipL]!.x + at[POSE.hipR]!.x) / 2;
+    const landmarks = figure.pose.landmarks.map((p, i) =>
+      i === POSE.wristL || i === POSE.wristR
+        ? { ...p, x: (midX + (i === POSE.wristL ? 8 : -8)) / figure.mask.width }
+        : p,
+    );
+    const pose: PoseObservation = { ...figure.pose, landmarks };
+    // Every gated landmark is visible and the shoulders face the camera, and measureBody would measure
+    // a body with every ratio > 0: the wrists alone fail the gate.
+    const measured = measureBody({
+      pose,
+      mask: figure.mask,
+      faceBox: faceBox(toPixels(person.face)),
+      headTopY: headTopY(person.face, headTopFactor(CORR)),
+      width: person.image.width,
+      height: person.image.height,
+    });
+    expect(Object.values(measured!.features).every((v) => Number.isFinite(v) && v > 0)).toBe(true);
+
+    const result = await analyse(pose, 180);
+    expect(result.pose).toBe(pose);
+    expect(result.body).toEqual({ gate: 'not_visible', measurement: null });
+    expect(result.params.body).toEqual({ ...defaultParams.body, gender: 0.7, heightCm: 180 });
+    expect(result.likenessGate).toBe('ok');
+  });
+
+  /** The pose with its right ankle hidden (visibility 0.3): the body gate fails. */
+  const withAnkleHidden = (pose: PoseObservation): PoseObservation => ({
+    ...pose,
+    landmarks: pose.landmarks.map((p, i) => (i === POSE.ankleR ? { ...p, visibility: 0.3 } : p)),
+  });
+
+  test("gate 'not_visible': no measurement, and the photo face is still built", async () => {
+    const result = await analyse(withAnkleHidden(figure.pose));
+    expect(result.body).toEqual({ gate: 'not_visible', measurement: null });
+    expect(result.likenessGate).toBe('ok');
+    expect(result.likeness).toBe(LIKENESS);
+    // No height entered: the current one.
+    expect(result.params.body).toEqual({ ...defaultParams.body, gender: 0.7, heightCm: 170 });
+  });
+
+  test("a pose past the gate whose body can't be measured → not_visible, the default body, and the photo face still built", async () => {
+    expect(checkBodyGate(figure.pose)).toBe('ok');
+    // A background hole 40 px wide down the midline (x 320) over the waist band (its rows 311..381):
+    // far past the bridge, so the band keeps no row and measureBody finds nothing.
+    const data = figure.mask.data.slice();
+    for (let y = 290; y < 410; y++) {
+      for (let x = 300; x < 340; x++) data[y * figure.mask.width + x] = MASK.background;
+    }
+    const result = await analyse(figure.pose, 180, { ...figure.mask, data });
+    expect(result.pose).toBe(figure.pose);
+    expect(result.body).toEqual({ gate: 'not_visible', measurement: null });
+    expect(result.params.body).toEqual({ ...defaultParams.body, gender: 0.7, heightCm: 180 });
+    expect(result.likenessGate).toBe('ok');
+    expect(result.likeness).toBe(LIKENESS);
+    expect(result.params.face).toBe('photo');
+  });
+
+  test.each([
+    [Number.NaN, 170],
+    [Number.POSITIVE_INFINITY, 170],
+    [300, 210],
+    [100, 140],
+    [180, 180],
+  ])(
+    'an entered height of %d → params.body.heightCm %d (finite, within the schema’s bounds, else the current one), and the params parse',
+    async (entered, expected) => {
+      const measured = await analyse(figure.pose, entered);
+      expect(measured.body.gate).toBe('ok');
+      expect(measured.params.body.heightCm).toBe(expected);
+      expect(avatarParamsSchema.parse(measured.params)).toEqual(measured.params);
+
+      // Without a measurement too: the default body at that height.
+      const hidden = await analyse(withAnkleHidden(figure.pose), entered);
+      expect(hidden.body.gate).toBe('not_visible');
+      expect(hidden.params.body).toEqual({
+        ...defaultParams.body,
+        gender: 0.7,
+        heightCm: expected,
+      });
+      expect(avatarParamsSchema.parse(hidden.params)).toEqual(hidden.params);
+    },
+  );
+
+  test('no pose → no_pose, and the default body', async () => {
+    const result = await analyzePhoto(blob, { catalog: null, current, adapter: adapter() });
+    expect(result.body).toEqual({ gate: 'no_pose', measurement: null });
+    expect(result.params.body).toEqual({ ...defaultParams.body, gender: 0.7, heightCm: 170 });
+  });
 });
 
 test('a face 200 px wide at full resolution → params with the default face and no likeness', async () => {
