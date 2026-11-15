@@ -1,3 +1,4 @@
+import { checkBodyGate } from '../../src/analysis/body/gate';
 import {
   BODY_FEATURES,
   headTopFactor,
@@ -8,24 +9,61 @@ import {
   WIDTH_FEATURES,
   type BodyFeature,
 } from '../../src/analysis/body/measure';
-import { MASK, type FaceObservation, type PoseObservation } from '../../src/analysis/types';
+import { POSE } from '../../src/analysis/pose';
+import {
+  MASK,
+  type CategoryMask,
+  type FaceObservation,
+  type PoseObservation,
+} from '../../src/analysis/types';
 import {
   headCorrespondence,
   synthBody,
+  type SynthBody,
   type SynthBodyOptions,
 } from '../../tools/test-fixtures/body';
 
-function measure(opts: SynthBodyOptions = {}) {
-  const fx = synthBody(opts);
-  const m = measureBody({
-    pose: fx.pose,
-    mask: fx.mask,
+/** measureBody on the figure at its analysed size, with its own mask, pose and head top unless given. */
+function measureOf(
+  fx: SynthBody,
+  over: { mask?: CategoryMask; pose?: PoseObservation; headTopY?: number } = {},
+) {
+  return measureBody({
+    pose: over.pose ?? fx.pose,
+    mask: over.mask ?? fx.mask,
     faceBox: fx.faceBox,
-    headTopY: fx.headTopY,
+    headTopY: over.headTopY ?? fx.headTopY,
     width: fx.mask.width,
     height: fx.mask.height,
   });
+}
+
+function measure(opts: SynthBodyOptions = {}) {
+  const fx = synthBody(opts);
+  const m = measureOf(fx);
+  if (!m) throw new Error('measureBody: no measurement of the figure');
   return { fx, m };
+}
+
+/** The figure's mask with a background stripe `w` px wide down its midline (x 300), on rows y0..y1 − 1. */
+function striped(fx: SynthBody, w: number, ...rows: [number, number][]): CategoryMask {
+  const data = fx.mask.data.slice();
+  for (const [y0, y1] of rows) {
+    for (let y = y0; y < y1; y++) {
+      for (let x = 300 - w / 2; x < 300 + w / 2; x++) data[y * fx.mask.width + x] = MASK.background;
+    }
+  }
+  return { ...fx.mask, data };
+}
+
+/** The rows y0..y1 − 1 that hold the band's (t from the shoulder line to the hip line), and 2 more each way. */
+function bandRows(fx: SynthBody, band: keyof typeof MEASURE.bands): [number, number] {
+  const lineY = (i: number, j: number) =>
+    ((fx.pose.landmarks[i]!.y + fx.pose.landmarks[j]!.y) / 2) * fx.mask.height;
+  const shoulderY = lineY(POSE.shoulderL, POSE.shoulderR);
+  const length = lineY(POSE.hipL, POSE.hipR) - shoulderY;
+  const [t0, t1] = MEASURE.bands[band];
+  return [Math.floor(shoulderY + t0 * length) - 2, Math.ceil(shoulderY + t1 * length) + 2];
 }
 
 const LINEAR = BODY_FEATURES.filter((f) => f !== 'area');
@@ -89,20 +127,76 @@ test('touching legs: the thigh width is still the thigh’s', () => {
 
 test('a background gap down the torso is bridged up to 1 % of the height, even at the midline', () => {
   const { fx, m } = measure();
-  /** The bust width with a background stripe `w` px wide down the midline (x 300), over the bust band. */
-  const striped = (w: number) => {
-    const data = fx.mask.data.slice();
-    for (let y = 300; y < 380; y++) {
-      for (let x = 300 - w / 2; x < 300 + w / 2; x++) data[y * fx.mask.width + x] = MASK.background;
-    }
-    const mask = { ...fx.mask, data };
-    const input = { pose: fx.pose, mask, faceBox: fx.faceBox, headTopY: fx.headTopY };
-    return measureBody({ ...input, width: mask.width, height: mask.height }).features.bustWidth;
-  };
   expect(MEASURE.gapFraction * m.heightPx).toBe(8);
-  expect(striped(6)).toBe(m.features.bustWidth);
-  // Past the gap, the span ends at the stripe: only the half beside the nearest pixel is left.
-  expect(striped(12) * m.heightPx).toBeLessThan((m.features.bustWidth * m.heightPx) / 2);
+  expect(bandRows(fx, 'bust')).toEqual([324, 357]); // the bust band's rows are 327..353
+  expect(measureOf(fx, { mask: striped(fx, 6, [300, 380]) })!.features.bustWidth).toBe(
+    m.features.bustWidth,
+  );
+  // Past the bridge, a row whose span would not hold the midline is skipped: with 18 of the bust's 27
+  // rows striped, its median is the other 9 rows' width (each the full bust), not half of it.
+  const partial = measureOf(fx, { mask: striped(fx, 12, [300, 345]) })!;
+  expect(partial.features.bustWidth).toBe(m.features.bustWidth);
+  expect(partial.lines.find((l) => l.feature === 'bustWidth')!.a.y).toBeGreaterThan(345);
+});
+
+test.each(['shoulder', 'bust', 'waist', 'hip'] as const)(
+  'a midline gap past the bridge across the whole %s band leaves it no row: no measurement',
+  (band) => {
+    const fx = synthBody();
+    expect(measureOf(fx, { mask: striped(fx, 12, bandRows(fx, band)) })).toBeNull();
+    expect(measureOf(fx, { mask: striped(fx, 6, bandRows(fx, band)) })).not.toBeNull();
+  },
+);
+
+test('hair down the midline with the body on one side only: once it is trimmed, the span misses the midline and the row is skipped', () => {
+  const fx = synthBody();
+  const [y0, y1] = bandRows(fx, 'bust');
+  const data = fx.mask.data.slice();
+  // Over the bust band: hair on x 294..305 (the midline at 300) and the background left of it.
+  for (let y = y0; y < y1; y++) {
+    for (let x = 0; x < 306; x++)
+      data[y * fx.mask.width + x] = x >= 294 ? MASK.hair : MASK.background;
+  }
+  expect(measureOf(fx, { mask: { ...fx.mask, data } })).toBeNull();
+});
+
+test.each(['leftTouching', 'bothTouching'] as const)(
+  'arms %s, a midline gap past the bridge over part of the bust and waist bands: every torso width positive, and within 1 px of the clear figure’s',
+  (arms) => {
+    const clear = measure().m;
+    const fx = synthBody({ arms });
+    // The bust band's rows are 327..353 and the waist's 396..478. Striped: 14 of the bust's 27 rows,
+    // more than half, so a row measured on one side would be its median (the middle 13 are left, where
+    // the touching arms meet the torso), and the waist's top rows, ahead of its narrowest row at y 437.
+    const m = measureOf(fx, { mask: striped(fx, 12, [300, 334], [347, 420]) })!;
+    expect(m).not.toBeNull();
+    for (const f of ['shoulderWidth', ...TORSO] as const) {
+      expect(m.features[f], f).toBeGreaterThan(0);
+    }
+    for (const f of TORSO) {
+      expect(Math.abs(m.features[f] - clear.features[f]), f).toBeLessThanOrEqual(1 / m.heightPx);
+    }
+    expect(m.armsTouching).toEqual({ left: true, right: arms === 'bothTouching' });
+  },
+);
+
+test('no measurement when the hip line is not below the shoulder line, or the height is not positive', () => {
+  const fx = synthBody();
+  /** The pose with the hips' y (analysed px) moved to `y`. */
+  const hipsAt = (y: number): PoseObservation => ({
+    ...fx.pose,
+    landmarks: fx.pose.landmarks.map((p, i) =>
+      i === POSE.hipL || i === POSE.hipR ? { ...p, y: y / fx.mask.height } : p,
+    ),
+  });
+  const shoulderY = fx.pose.landmarks[POSE.shoulderL]!.y * fx.mask.height; // 244, both level
+  for (const y of [shoulderY - 50, shoulderY]) {
+    const pose = hipsAt(y);
+    expect(checkBodyGate(pose)).toBe('ok'); // the gate passes such a pose
+    expect(measureOf(fx, { pose })).toBeNull();
+  }
+  // The head top at the ankle line (y 900), or below it.
+  for (const top of [900, 950]) expect(measureOf(fx, { headTopY: top })).toBeNull();
 });
 
 test('a mask at half the analysed size is resampled to it', () => {
@@ -117,14 +211,7 @@ test('a mask at half the analysed size is resampled to it', () => {
       half.data[y * half.width + x] = fx.mask.data[2 * y * fx.mask.width + 2 * x]!;
     }
   }
-  const coarse = measureBody({
-    pose: fx.pose,
-    mask: half,
-    faceBox: fx.faceBox,
-    headTopY: fx.headTopY,
-    width: fx.mask.width,
-    height: fx.mask.height,
-  });
+  const coarse = measureOf(fx, { mask: half })!;
   // Each edge moves by at most one analysed pixel.
   for (const f of WIDTH_FEATURES) {
     expect(Math.abs(coarse.features[f] - m.features[f]), f).toBeLessThanOrEqual(2 / m.heightPx);

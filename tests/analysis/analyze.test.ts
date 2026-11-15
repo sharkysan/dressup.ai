@@ -7,6 +7,7 @@ import {
   messageFor,
   pickLargest,
 } from '../../src/analysis/analyze';
+import { checkBodyGate } from '../../src/analysis/body/gate';
 import { headTopFactor, headTopY } from '../../src/analysis/body/measure';
 import { DecodeError } from '../../src/analysis/image';
 import { faceBox, LM, toPixels } from '../../src/analysis/landmarks';
@@ -15,6 +16,7 @@ import { faceFromCrop, headCropRect, POSE } from '../../src/analysis/pose';
 import {
   MASK,
   type Box,
+  type CategoryMask,
   type FaceObservation,
   type Point2,
   type PoseObservation,
@@ -298,12 +300,12 @@ describe('the body gate and the body measurement', () => {
     body: { ...defaultParams.body, heightCm: 170, gender: 0.7, weight: 0.5, hips: -0.4 },
   };
 
-  function analyse(pose: PoseObservation, heightCm?: number) {
+  function analyse(pose: PoseObservation, heightCm?: number, mask: CategoryMask = figure.mask) {
     // The face 300 px wide at full resolution: past the projection gate.
     decodedAt(300 / faceBox(toPixels(person.face)).width, person.image);
     const a = adapter([person.face], {
       detectPoses: vi.fn().mockReturnValue([pose]),
-      segment: vi.fn().mockReturnValue(figure.mask),
+      segment: vi.fn().mockReturnValue(mask),
     });
     return analyzePhoto(blob, { catalog: null, current, heightCm, adapter: a });
   }
@@ -334,6 +336,23 @@ describe('the body gate and the body measurement', () => {
     expect(result.likeness).toBe(LIKENESS);
     // No height entered: the current one.
     expect(result.params.body).toEqual({ ...defaultParams.body, gender: 0.7, heightCm: 170 });
+  });
+
+  test("a pose past the gate whose body can't be measured → not_visible, the default body, and the photo face still built", async () => {
+    expect(checkBodyGate(figure.pose)).toBe('ok');
+    // A background hole 40 px wide down the midline (x 320) over the waist band (its rows 311..381):
+    // far past the bridge, so the band keeps no row and measureBody finds nothing.
+    const data = figure.mask.data.slice();
+    for (let y = 290; y < 410; y++) {
+      for (let x = 300; x < 340; x++) data[y * figure.mask.width + x] = MASK.background;
+    }
+    const result = await analyse(figure.pose, 180, { ...figure.mask, data });
+    expect(result.pose).toBe(figure.pose);
+    expect(result.body).toEqual({ gate: 'not_visible', measurement: null });
+    expect(result.params.body).toEqual({ ...defaultParams.body, gender: 0.7, heightCm: 180 });
+    expect(result.likenessGate).toBe('ok');
+    expect(result.likeness).toBe(LIKENESS);
+    expect(result.params.face).toBe('photo');
   });
 
   test('no pose → no_pose, and the default body', async () => {

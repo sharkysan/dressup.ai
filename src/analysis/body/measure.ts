@@ -130,18 +130,21 @@ type Arm = { side: 'left' | 'right'; shoulder: Point2; elbow: Point2; wrist: Poi
  * - Height: the ankle line (mean y of 27, 28) − `headTopY`.
  * - Silhouette: bodySkin ∪ faceSkin ∪ clothes, the hair kept apart, both within personRegion.
  * - Torso width at a row: the span of body ∪ hair through the midline (the line through the mid-shoulder
- *   and mid-hip points), or through the nearest set pixel within `gapFraction` × heightPx of it, bridging
- *   background gaps up to that long; then the hair is trimmed off both ends. In the bust, waist and hip
- *   bands a side whose arm axis (shoulder→elbow, or elbow→wrist below the elbow) lies inside the span
- *   touches: it takes the other side's half-width, or, when both touch, each side ends at its axis less
- *   half the upper arm's width. Per band: the shoulder's widest row, the bust's median, the waist's
- *   narrowest, the hip's widest.
+ *   and mid-hip points), bridging background gaps up to `gapFraction` × heightPx long, one at the
+ *   midline too; then the hair is trimmed off both ends. A row whose span does not hold the midline is
+ *   skipped. In the bust, waist and hip bands a side whose arm axis (shoulder→elbow, or elbow→wrist
+ *   below the elbow) lies inside the span touches: it takes the other side's half-width, or, when both
+ *   touch, each side ends at its axis less half the upper arm's width. Per band: the shoulder's widest
+ *   row, the bust's median, the waist's narrowest, the hip's widest.
  * - Limb width: across the limb at `limbAt` along it, walking the perpendicular over the body (no hair)
  *   both ways to the background: twice the shorter half, so a hand on the thigh or touching legs never
  *   widen it.
  * - Lengths: hip→knee→ankle and shoulder→elbow→wrist. Area: the body's pixels from the shoulder line to
  *   the ankle line.
  * - Widths and lengths ÷ heightPx; the area ÷ heightPx².
+ *
+ * Null when there is no body to measure: heightPx ≤ 0, the hip line not below the shoulder line, or a
+ * torso band with no row left (analyzePhoto then reports the body gate as 'not_visible').
  */
 export function measureBody(input: {
   pose: PoseObservation;
@@ -150,14 +153,17 @@ export function measureBody(input: {
   headTopY: number;
   width: number;
   height: number;
-}): BodyMeasurement {
+}): BodyMeasurement | null {
   const { pose, width, height } = input;
   const points = posePixels(pose);
   const at = (i: number) => points[i]!;
-  const region = personRegion(pose, input.faceBox, width, height);
-  const sil = silhouette(input.mask, region, width, height);
   const ankleY = (at(POSE.ankleL).y + at(POSE.ankleR).y) / 2;
   const heightPx = ankleY - input.headTopY;
+  const shoulderY = (at(POSE.shoulderL).y + at(POSE.shoulderR).y) / 2;
+  const hipY = (at(POSE.hipL).y + at(POSE.hipR).y) / 2;
+  if (!(heightPx > 0) || !(hipY > shoulderY)) return null;
+  const region = personRegion(pose, input.faceBox, width, height);
+  const sil = silhouette(input.mask, region, width, height);
 
   const limb = (feature: BodyFeature, segments: [number, number][], along: number) => {
     const measured = segments.map(([a, b]) => limbWidth(sil, at(a), at(b), along));
@@ -192,6 +198,7 @@ export function measureBody(input: {
     limbAt.upperArm,
   );
   const torso = torsoWidths(sil, at, heightPx, upperArm.width);
+  if (!torso) return null;
 
   const dist = (i: number, j: number) => Math.hypot(at(i).x - at(j).x, at(i).y - at(j).y);
   const legLength = mean([
@@ -202,7 +209,6 @@ export function measureBody(input: {
     dist(POSE.shoulderL, POSE.elbowL) + dist(POSE.elbowL, POSE.wristL),
     dist(POSE.shoulderR, POSE.elbowR) + dist(POSE.elbowR, POSE.wristR),
   ]);
-  const shoulderY = (at(POSE.shoulderL).y + at(POSE.shoulderR).y) / 2;
   const area = bodyArea(sil, shoulderY, ankleY);
 
   const ratio = (px: number) => px / heightPx;
@@ -247,7 +253,10 @@ function silhouette(mask: CategoryMask, region: Box, width: number, height: numb
   return { body, hair, width, height };
 }
 
-/** The four torso widths (px) by MEASURE.bands, with the rows they came from and the touching arms. */
+/**
+ * The four torso widths (px) by MEASURE.bands, with the rows they came from and the touching arms; null
+ * when a band has no row (its rows are off the image, or every one is skipped: torsoSpan).
+ */
 function torsoWidths(
   sil: Silhouette,
   at: (i: number) => Point2,
@@ -257,7 +266,7 @@ function torsoWidths(
   widths: { shoulder: number; bust: number; waist: number; hip: number };
   armsTouching: { left: boolean; right: boolean };
   lines: BodyMeasurement['lines'];
-} {
+} | null {
   const midpoint = (a: Point2, b: Point2) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
   const shoulder = midpoint(at(POSE.shoulderL), at(POSE.shoulderR));
   const hip = midpoint(at(POSE.hipL), at(POSE.hipR));
@@ -269,9 +278,8 @@ function torsoWidths(
   ];
   const armsTouching = { left: false, right: false };
 
-  /** The rows whose centres lie in the band (t → shoulder.y + t × length). */
+  /** The rows whose centres lie in the band (t → shoulder.y + t × length; measureBody: length > 0). */
   const rows = ([t0, t1]: readonly [number, number]): number[] => {
-    if (!(length > 0)) return [];
     const out: number[] = [];
     const first = Math.max(0, Math.ceil(shoulder.y + t0 * length - 0.5));
     const last = Math.min(sil.height - 1, Math.floor(shoulder.y + t1 * length - 0.5));
@@ -284,7 +292,7 @@ function torsoWidths(
     const mid = shoulder.x + ((yc - shoulder.y) / length) * (hip.x - shoulder.x);
     const span = torsoSpan(sil, y, mid, gapPx);
     if (!span) return null;
-    // Half-widths on the image's left (lo) and right (hi) of the midline.
+    // Half-widths on the image's left (lo) and right (hi) of the midline, both ≥ 0: the span holds it.
     let lo = mid - span.left;
     let hi = span.right + 1 - mid;
     if (armRule) {
@@ -314,7 +322,7 @@ function torsoWidths(
     const measured = rows(t)
       .map((y) => measureRow(y, armRule))
       .filter((r): r is RowWidth => r !== null);
-    return { feature, ...reduce(measured) };
+    return measured.length > 0 ? { feature, ...reduce(measured) } : null;
   };
   const { bands } = MEASURE;
   const results = [
@@ -323,18 +331,20 @@ function torsoWidths(
     band('waistWidth', bands.waist, narrowest),
     band('hipWidth', bands.hip, widest),
   ];
-  const [s, b, w, h] = results.map((r) => r.width) as [number, number, number, number];
+  const [s, b, w, h] = results;
+  if (!s || !b || !w || !h) return null;
   return {
-    widths: { shoulder: s, bust: b, waist: w, hip: h },
+    widths: { shoulder: s.width, bust: b.width, waist: w.width, hip: h.width },
     armsTouching,
-    lines: results.flatMap(({ feature, row }) => (row ? [{ feature, a: row.a, b: row.b }] : [])),
+    lines: [s, b, w, h].map(({ feature, row }) => ({ feature, a: row.a, b: row.b })),
   };
 }
 
 /**
- * The span (inclusive columns) of body ∪ hair on row `y` through `mid`, or through the nearest set pixel
- * within `gapPx` of it, bridging background gaps up to `gapPx` long; then the hair (and any gap it
- * bridged) trimmed off both ends. Null when nothing of the body remains.
+ * The span (inclusive columns) of body ∪ hair on row `y` that holds the midline `mid`, bridging
+ * background gaps up to `gapPx` long, the one the midline may lie in too; then the hair (and any gap it
+ * bridged) trimmed off both ends. Null, and the row skipped, when the span does not hold the midline: it
+ * lies in a wider gap, or in hair with the body on one side only (spec §6).
  */
 function torsoSpan(
   sil: Silhouette,
@@ -345,29 +355,28 @@ function torsoSpan(
   const { body, hair, width } = sil;
   const row = y * width;
   const set = (x: number) => x >= 0 && x < width && (body[row + x]! | hair[row + x]!) === 1;
-  let seed = Math.floor(mid);
-  if (!set(seed)) {
-    let found: number | null = null;
-    for (let d = 1; d <= gapPx && found === null; d++) {
-      if (set(seed - d)) found = seed - d;
-      else if (set(seed + d)) found = seed + d;
-    }
-    if (found === null) return null;
-    seed = found;
-  }
-  const reach = (step: 1 | -1) => {
-    let last = seed;
-    for (let x = seed + step; x >= 0 && x < width; x += step) {
+  const m = Math.floor(mid);
+  if (m < 0 || m >= width) return null;
+  // The set pixels nearest the midline on either side, m itself when set: the gap between them, if
+  // any, is the one the midline lies in.
+  let l = m;
+  while (l >= 0 && !set(l)) l--;
+  let r = m;
+  while (r < width && !set(r)) r++;
+  if (l < 0 || r >= width || r - l - 1 > gapPx) return null;
+  const reach = (from: number, step: 1 | -1) => {
+    let last = from;
+    for (let x = from + step; x >= 0 && x < width; x += step) {
       if (set(x)) last = x;
       else if (Math.abs(x - last) > gapPx) break;
     }
     return last;
   };
-  let left = reach(-1);
-  let right = reach(1);
+  let left = reach(l, -1);
+  let right = reach(r, 1);
   while (left <= right && !body[row + left]) left++;
   while (right >= left && !body[row + right]) right--;
-  return left <= right ? { left, right } : null;
+  return left <= m && m <= right ? { left, right } : null;
 }
 
 /** The arm's axis at height `y`: shoulder→elbow above the elbow, elbow→wrist below it; null if level. */
@@ -426,20 +435,20 @@ function bodyArea(sil: Silhouette, fromY: number, toY: number): number {
   return n;
 }
 
-type Reducer = (rows: RowWidth[]) => { width: number; row: RowWidth | null };
+/** A band's width from its rows (at least one), and the row it came from. */
+type Reducer = (rows: RowWidth[]) => { width: number; row: RowWidth };
 
 const widest: Reducer = (rows) => extreme(rows, (a, b) => a > b);
 const narrowest: Reducer = (rows) => extreme(rows, (a, b) => a < b);
 
 function extreme(rows: RowWidth[], better: (a: number, b: number) => boolean) {
-  let row: RowWidth | null = null;
-  for (const r of rows) if (!row || better(r.width, row.width)) row = r;
-  return { width: row?.width ?? 0, row };
+  let row = rows[0]!;
+  for (const r of rows) if (better(r.width, row.width)) row = r;
+  return { width: row.width, row };
 }
 
 /** The median width (the mean of the middle two of an even count), and the lower middle row. */
 const median: Reducer = (rows) => {
-  if (rows.length === 0) return { width: 0, row: null };
   const sorted = [...rows].sort((a, b) => a.width - b.width);
   const m = (sorted.length - 1) / 2;
   const lower = sorted[Math.floor(m)]!;

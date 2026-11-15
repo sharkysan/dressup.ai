@@ -9,7 +9,8 @@ export const BODY_GATE = { minVisibility: 0.5, maxShoulderTurnDeg: 25 } as const
 
 /**
  * 'ok': the body is measured. 'no_pose': no pose under the chosen face. 'not_visible': a gated landmark
- * is hidden. 'turned': the shoulders are turned too far.
+ * is hidden; analyzePhoto also reports it when the pose passes but measureBody finds no body to measure.
+ * 'turned': the shoulders are turned too far.
  */
 export type BodyGate = 'ok' | 'no_pose' | 'not_visible' | 'turned';
 

@@ -76,8 +76,9 @@ export type AnalyzeResult = {
   /** The pose whose nose lies in the chosen face's box (pickPose); null when none does. */
   pose: PoseObservation | null;
   /**
-   * The body gate on `pose` (spec §6), and the body measured on the photo when it is 'ok'. Whatever the
-   * gate, `params.body` is the default body (bodyParams).
+   * The body gate on `pose` (spec §6), and the body measured on the photo when it is 'ok'. A pose that
+   * passes checkBodyGate but whose body measureBody can't measure is 'not_visible' too, with no
+   * measurement. Whatever the gate, `params.body` is the default body (bodyParams).
    */
   body: { gate: BodyGate; measurement: BodyMeasurement | null };
   /** The photo face when likenessGate is 'ok'; otherwise null, and `params.face` is 'default'. */
@@ -168,9 +169,9 @@ export async function analyzePhoto(
     const box = faceBox(toPixels(face));
     const pose = pickPose(poses, box);
     const mask = adapter.segment(decoded.canvas);
-    const gate = checkBodyGate(pose);
+    const poseGate = checkBodyGate(pose);
     const measurement =
-      pose && gate === 'ok'
+      pose && poseGate === 'ok'
         ? measureBody({
             pose,
             mask,
@@ -180,6 +181,8 @@ export async function analyzePhoto(
             height: decoded.image.height,
           })
         : null;
+    // No body to measure on a pose that passed (spec §6, body.*): the default body, as for a hidden one.
+    const gate: BodyGate = poseGate === 'ok' && !measurement ? 'not_visible' : poseGate;
     const mapped = analyzeToParams(
       { face, mask, image: decoded.image, faceBox: box },
       {

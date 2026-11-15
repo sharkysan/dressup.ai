@@ -228,7 +228,7 @@ git commit -m "feat(analysis): PoseLandmarker, and faces found on a head crop of
     - `headTopFactor(corr: Correspondence): number`, computed as `(skullTop − y₁₀) / (y₁₀ − y₁₅₂)`. `skullTop` is the highest head vertex with weight ≥ 0.999; `y₁₀` and `y₁₅₂` are the base positions of landmarks 10 and 152.
     - `headTopY(face: FaceObservation, factor: number): number` (analysed pixels).
     - `personRegion(pose, faceBox: Box, width, height): Box`.
-    - `measureBody(input: { pose: PoseObservation; mask: CategoryMask; faceBox: Box; headTopY: number; width: number; height: number }): BodyMeasurement`.
+    - `measureBody(input: { pose: PoseObservation; mask: CategoryMask; faceBox: Box; headTopY: number; width: number; height: number }): BodyMeasurement | null` (null: see the torso span).
     - `BodyMeasurement = { features; heightPx; headTopY; ankleY; region: Box; armsTouching: { left: boolean; right: boolean }; lines: { feature: BodyFeature; a: Point2; b: Point2 }[] }`. `lines` holds where each width was measured, for the overlay.
   - `analyze.ts`:
     - `AnalyzeResult.body: { gate: BodyGate; measurement: BodyMeasurement | null }`.
@@ -251,8 +251,10 @@ export const MEASURE = {
 - **Height.** `heightPx` = ankle line (mean y of 27 and 28) − `headTopY`.
 - **Silhouette.** `body` = bodySkin ∪ faceSkin ∪ clothes, with hair kept as a separate mask. Both are resampled to the analysed size and restricted to `personRegion`.
 - **Torso span at row y.** The midline runs through the mid-shoulder and mid-hip points.
-  - The span is the longest interval of body ∪ hair through the midline (or through the nearest set pixel within the gap) in which every background gap is ≤ `gapFraction × heightPx`.
+  - The span is the longest interval of body ∪ hair through the midline in which every background gap is ≤ `gapFraction × heightPx`, one the midline lies in included.
   - Hair pixels are then trimmed off both ends.
+  - A row whose span does not contain the midline (it lies in a wider gap, or in hair with the body on one side only) is skipped: it never reaches the reducers.
+  - `measureBody` returns null when any torso band has no row left, when `heightPx` ≤ 0, or when the hip line is not below the shoulder line. `analyzePhoto` then reports `body.gate: 'not_visible'` with `measurement: null` and the default body.
   - The shoulder band takes the span as it is: the arms hang from there.
 - **Arms in the bust, waist and hip bands.**
   - A side touches when its arm axis lies inside the span. The axis at row y is shoulder→elbow, or elbow→wrist below the elbow.

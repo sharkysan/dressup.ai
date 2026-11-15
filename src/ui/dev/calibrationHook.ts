@@ -20,7 +20,7 @@ export type CalibrationSample = {
   error: AnalysisErrorCode | null;
   poseFound: boolean;
   likenessGate: AnalyzeResult['likenessGate'] | null;
-  /** The body gate on the pose, null when the analysis rejected. */
+  /** The body gate (AnalyzeResult.body.gate), null when the analysis rejected. */
   bodyGate: BodyGate | null;
   /** The body's features when the gate passed, else null. */
   features: BodyFeatures | null;
