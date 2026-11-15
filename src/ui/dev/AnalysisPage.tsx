@@ -31,11 +31,18 @@ export function AnalysisPage() {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalyzeResult | null>(null);
-  const [heightCm, setHeightCm] = useState(() => useAppStore.getState().params.body.heightCm);
+  const [heightText, setHeightText] = useState(() =>
+    String(useAppStore.getState().params.body.heightCm),
+  );
   const lastFile = useRef<File | null>(null);
 
   async function run(file: File) {
     lastFile.current = file;
+    const typed = Number(heightText);
+    const heightCm =
+      heightText.trim() !== '' && Number.isFinite(typed)
+        ? Math.min(210, Math.max(140, typed))
+        : useAppStore.getState().params.body.heightCm;
     setStatus('loading');
     setError(null);
     try {
@@ -112,8 +119,8 @@ export function AnalysisPage() {
             type="number"
             min={140}
             max={210}
-            value={heightCm}
-            onChange={(e) => setHeightCm(e.target.valueAsNumber)}
+            value={heightText}
+            onChange={(e) => setHeightText(e.target.value)}
             style={{ width: 70 }}
           />
         </label>

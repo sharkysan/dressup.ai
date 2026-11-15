@@ -258,6 +258,19 @@ test('the height input defaults to the store height and reaches analyzePhoto', a
   expect(vi.mocked(analyzePhoto).mock.calls[0]![1]).toMatchObject({ heightCm: 182 });
 });
 
+test.each([
+  ['', useAppStore.getState().params.body.heightCm],
+  ['300', 210],
+  ['100', 140],
+])('the height input value %j reaches analyzePhoto as %d', async (typed, expected) => {
+  vi.mocked(analyzePhoto).mockResolvedValue(base);
+  render(<AnalysisPage />);
+  fireEvent.change(screen.getByTestId('height-input'), { target: { value: typed } });
+  await act(async () => upload());
+  await screen.findByText('Apply to avatar');
+  expect(vi.mocked(analyzePhoto).mock.calls[0]![1]).toMatchObject({ heightCm: expected });
+});
+
 test.each(GATES)('the body gate line for %s', async (gate) => {
   vi.mocked(analyzePhoto).mockResolvedValue({ ...base, body: { gate, measurement: null } });
   render(<AnalysisPage />);
